@@ -2,18 +2,14 @@
 
 use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
-    error::Error,
-    fmt::{self, Display},
-    io,
-    ops::{Deref, DerefMut},
-    path::{Path, PathBuf}, rc::Rc,
+    collections::BTreeMap, error::Error, fmt::{self, Display}, fs, io, ops::{Deref, DerefMut}, path::{Path, PathBuf}, rc::Rc
 };
 
-const SAVE_PATH: &str = "~/Documents/VittuSave/";
+const SAVE_PATH: &str = "/home/matheus/Documents/VittuSave/";
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct SaveMetadata {
     pub label: String,
     pub loaded: bool,
@@ -34,18 +30,28 @@ struct SaveMetadata {
 trait SaveSwapper: fmt::Debug + Deref<Target = BTreeMap<Rc<Path>, SaveMetadata>> + DerefMut {
     fn name(&self) -> &'static str;
     fn path(&self) -> &'static str;
+    fn save(&self) -> io::Result<()>;
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct MySummerCarSaves {
+    // TODO: Ask user to save or add config pane
     saves: BTreeMap<Rc<Path>, SaveMetadata>,
 }
 
 impl MySummerCarSaves {
-    fn new() -> Self {
-        MySummerCarSaves {
-            saves: BTreeMap::new(),
+    const FILE_PATH: &str = "/home/matheus/Documents/VittuSave/msc.toml";
+    const FOLDER_PATH: &str = "/home/matheus/Documents/VittuSave";
+
+    fn new() -> Result<Self, io::Error> {
+        let default = Self { saves: BTreeMap::new() };
+        if !fs::exists(Self::FILE_PATH)? {
+            fs::create_dir_all(Self::FOLDER_PATH)?;
+            fs::write(Self::FILE_PATH, toml::to_string(&default).unwrap())?;
         }
+        let saves: Self = toml::from_str(&fs::read_to_string(Self::FILE_PATH)?).unwrap();
+        let fuck = Box::leak(Box::new(default));
+        Ok(saves)
     }
 }
 
@@ -61,6 +67,11 @@ impl DerefMut for MySummerCarSaves {
         &mut self.saves
     }
 }
+impl Drop for MySummerCarSaves {
+    fn drop(&mut self) {
+        self.save().unwrap();
+    }
+}
 
 impl SaveSwapper for MySummerCarSaves {
     fn name(&self) -> &'static str {
@@ -68,6 +79,9 @@ impl SaveSwapper for MySummerCarSaves {
     }
     fn path(&self) -> &'static str {
         "MySummerCar"
+    }
+    fn save(&self) -> io::Result<()> {
+        fs::write(Self::FILE_PATH, toml::to_string(self).unwrap())
     }
 }
 
@@ -92,7 +106,7 @@ fn clear_screen(term: &Term, game: Option<&str>, save: Option<&str>) -> io::Resu
 fn run_action(term: &Term, save_swapper: &mut Box<dyn SaveSwapper>, action: Action) -> io::Result<()> {
     match action {
         Action::Toggle(path, _) => todo!(),
-        Action::Delete(path) => save_swapper.remove(&path),
+        Action::Delete(path) => { save_swapper.remove(&path); save_swapper.save(); },
         Action::Create(loaded)=> {
             clear_screen(term, Some(save_swapper.name()), None)?;
             let label: String = Input::new()
@@ -107,8 +121,8 @@ fn run_action(term: &Term, save_swapper: &mut Box<dyn SaveSwapper>, action: Acti
                 .unwrap();
             let path = PathBuf::from(path);
 
-            save_swapper.insert(Rc::from(path), SaveMetadata { label, loaded })
-            // todo!()
+            save_swapper.insert(Rc::from(path), SaveMetadata { label, loaded });
+            save_swapper.save()?;
         },
     };
     Ok(())
@@ -139,22 +153,22 @@ impl Display for Action {
 fn main() -> Result<(), Box<dyn Error>> {
     let term = Term::stdout();
 
-    let mut save_swappers: Vec<Box<dyn SaveSwapper>> = vec![Box::new(MySummerCarSaves::new())];
-    save_swappers[0].insert(
-        Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save1")),
-        SaveMetadata {
-            label: "Save 1".to_string(),
-            loaded: true,
-        },
-    );
-    save_swappers[0].insert(
-        Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save2")),
-        SaveMetadata {
-            label: "Save 2".to_string(),
-            loaded: false,
-        },
-    );
-    dbg!(&save_swappers[0]);
+    let mut save_swappers: Vec<Box<dyn SaveSwapper>> = vec![Box::new(MySummerCarSaves::new()?)];
+    // save_swappers[0].insert(
+    //     Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save1")),
+    //     SaveMetadata {
+    //         label: "Save 1".to_string(),
+    //         loaded: true,
+    //     },
+    // );
+    // save_swappers[0].insert(
+    //     Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save2")),
+    //     SaveMetadata {
+    //         label: "Save 2".to_string(),
+    //         loaded: false,
+    //     },
+    // );
+    // dbg!(&save_swappers[0]);
 
     loop {
         clear_screen(&term, None, None)?;
