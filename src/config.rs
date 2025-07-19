@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::LazyLock, error::Error};
+use std::{error::Error, fs, path::{Path, PathBuf}, sync::LazyLock};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -6,7 +6,7 @@ static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
     [dirs::config_local_dir().expect("user’s config directory not found"), PathBuf::from("VittuSave")].iter().collect()
 });
 
-fn make_config_path(filename: &str) -> PathBuf {
+fn make_config_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = CONFIG_DIR.clone();
     path.push(filename); 
     path.set_extension("toml");
@@ -14,7 +14,7 @@ fn make_config_path(filename: &str) -> PathBuf {
     path
 }
 
-pub fn write_config<T: Serialize>(filename: &str, config: &T) -> Result<(), Box<dyn Error>> {
+pub fn write_config<T: Serialize>(filename: impl AsRef<Path>, config: &T) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(CONFIG_DIR.as_path())?;
 
     let path = make_config_path(filename);
@@ -25,10 +25,10 @@ pub fn write_config<T: Serialize>(filename: &str, config: &T) -> Result<(), Box<
     Ok(())
 }
 
-pub fn read_config<T: Serialize + DeserializeOwned + Default>(filename: &str) -> Result<T, Box<dyn Error>> {
+pub fn read_config<T: Serialize + DeserializeOwned + Default>(filename: impl AsRef<Path>) -> Result<T, Box<dyn Error>> {
     fs::create_dir_all(CONFIG_DIR.as_path())?;
 
-    let path = make_config_path(filename);
+    let path = make_config_path(&filename);
 
     match fs::exists(&path) {
         Ok(true) => {

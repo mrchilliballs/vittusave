@@ -1,11 +1,12 @@
 // TODO: Do some sort of integrity check before loading saves
 
 mod config;
-mod utils;
 mod msc;
+mod utils;
 
 use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
+use msc::MySummerCarSaveSwapper;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -15,8 +16,6 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use msc::MySummerCarSaveSwapper;
-
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SaveMetadata {
@@ -42,7 +41,24 @@ fn run_action(
     action: Action,
 ) -> Result<(), Box<dyn Error>> {
     match action {
-        Action::Toggle(path, _) => todo!(),
+        Action::Toggle(path, _) => {
+            let metadata = save_swapper
+                .get_mut(&path)
+                .expect("tried to load/unload a non-existant save entry");
+            metadata.loaded = !metadata.loaded;
+            // TODO: Remove hard-coded save path
+            // test1 = origin
+            // test2 = game
+            if metadata.loaded {
+                utils::remove_dir_contents("/home/matheus/Documents/test2")?;
+                utils::copy_dir_all(
+                    "/home/matheus/Documents/test1",
+                    "/home/matheus/Documents/test2",
+                )?;
+            } else {
+                utils::remove_dir_contents("/home/matheus/Documents/test2")?;
+            }
+        }
         Action::Delete(path) => {
             save_swapper.remove(&path);
             save_swapper.save()?;
@@ -55,7 +71,15 @@ fn run_action(
                 .unwrap();
 
             // TODO
-            save_swapper.insert(Rc::from(PathBuf::from(&label)), SaveMetadata { label, loaded });
+            let path = Rc::from(PathBuf::from(&label));
+
+            save_swapper.insert(
+                Rc::clone(&path),
+                SaveMetadata { label, loaded: false },
+            );
+            if loaded {
+                run_action(term, save_swapper, Action::Toggle(path, false))?;
+            }
             save_swapper.save()?;
         }
     };
@@ -87,7 +111,8 @@ impl Display for Action {
 fn main() -> Result<(), Box<dyn Error>> {
     let term = Term::stdout();
 
-    let mut save_swappers: Vec<Box<dyn SaveSwapper>> = vec![Box::new(MySummerCarSaveSwapper::new()?)];
+    let mut save_swappers: Vec<Box<dyn SaveSwapper>> =
+        vec![Box::new(MySummerCarSaveSwapper::new()?)];
 
     loop {
         utils::clear_screen(&term, None, None)?;
@@ -155,7 +180,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let save_key = Rc::clone(keys[selection]);
             let save_metadata = save_swapper.get(&save_key).unwrap();
 
-            utils::clear_screen(&term, Some(save_swapper.display_name()), Some(&save_metadata.label))?;
+            utils::clear_screen(
+                &term,
+                Some(save_swapper.display_name()),
+                Some(&save_metadata.label),
+            )?;
             let actions = [
                 Action::Toggle(Rc::clone(&save_key), save_metadata.loaded),
                 Action::Delete(save_key),
