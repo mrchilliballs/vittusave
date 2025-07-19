@@ -1,17 +1,17 @@
 // TODO: Do some sort of integrity check before loading saves
 
 use console::{Term, style};
-use dialoguer::Select;
+use dialoguer::{Confirm, Input, Select};
 use std::{
     collections::BTreeMap,
     error::Error,
     fmt::{self, Display},
     io,
     ops::{Deref, DerefMut},
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, rc::Rc,
 };
 
-const SAVE_PATH: &'static str = "~/Documents/VittuSave";
+const SAVE_PATH: &str = "~/Documents/VittuSave/";
 
 #[derive(Debug)]
 struct SaveMetadata {
@@ -31,14 +31,14 @@ struct SaveMetadata {
 //     }
 // }
 
-trait SaveSwapper: fmt::Debug + Deref<Target = BTreeMap<PathBuf, SaveMetadata>> + DerefMut {
+trait SaveSwapper: fmt::Debug + Deref<Target = BTreeMap<Rc<Path>, SaveMetadata>> + DerefMut {
     fn name(&self) -> &'static str;
-    fn run_action(&self, action: &Action);
+    fn path(&self) -> &'static str;
 }
 
 #[derive(Debug)]
 struct MySummerCarSaves {
-    saves: BTreeMap<PathBuf, SaveMetadata>,
+    saves: BTreeMap<Rc<Path>, SaveMetadata>,
 }
 
 impl MySummerCarSaves {
@@ -50,7 +50,7 @@ impl MySummerCarSaves {
 }
 
 impl Deref for MySummerCarSaves {
-    type Target = BTreeMap<PathBuf, SaveMetadata>;
+    type Target = BTreeMap<Rc<Path>, SaveMetadata>;
 
     fn deref(&self) -> &Self::Target {
         &self.saves
@@ -64,10 +64,10 @@ impl DerefMut for MySummerCarSaves {
 
 impl SaveSwapper for MySummerCarSaves {
     fn name(&self) -> &'static str {
-        "My Summer car"
+        "My Summer Car"
     }
-    fn run_action(&self, action: &Action) {
-        todo!()
+    fn path(&self) -> &'static str {
+        "MySummerCar"
     }
 }
 
@@ -89,22 +89,49 @@ fn clear_screen(term: &Term, game: Option<&str>, save: Option<&str>) -> io::Resu
     Ok(())
 }
 
+fn run_action(term: &Term, save_swapper: &mut Box<dyn SaveSwapper>, action: Action) -> io::Result<()> {
+    match action {
+        Action::Toggle(path, _) => todo!(),
+        Action::Delete(path) => save_swapper.remove(&path),
+        Action::Create(loaded)=> {
+            clear_screen(term, Some(save_swapper.name()), None)?;
+            let label: String = Input::new()
+                .with_prompt("Enter save label")
+                .interact_text_on(term)
+                .unwrap();
+            clear_screen(term, Some(save_swapper.name()), Some(&label))?;
+            let path: String = Input::new()
+                .with_prompt("Enter the file path")
+                .with_initial_text(String::from(SAVE_PATH) + save_swapper.path() + "/")
+                .interact_text_on(term)
+                .unwrap();
+            let path = PathBuf::from(path);
+
+            save_swapper.insert(Rc::from(path), SaveMetadata { label, loaded })
+            // todo!()
+        },
+    };
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 enum Action {
-    Toggle(bool),
-    Delete,
+    Toggle(Rc<Path>, bool),
+    Delete(Rc<Path>),
+    Create(bool),
 }
 impl Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
-            Action::Toggle(loaded) => {
+            Action::Toggle(_, loaded) => {
                 if *loaded {
                     write!(f, "Unload")
                 } else {
                     write!(f, "Load")
                 }
             }
-            Action::Delete => write!(f, "{}", style("Delete").red()),
+            Action::Delete(_) => write!(f, "{}", style("Delete").red()),
+            Action::Create(_) => write!(f, "{}", style("Create").green()),
         }
     }
 }
@@ -114,14 +141,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut save_swappers: Vec<Box<dyn SaveSwapper>> = vec![Box::new(MySummerCarSaves::new())];
     save_swappers[0].insert(
-        PathBuf::from(String::from(SAVE_PATH) + "/Save1"),
+        Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save1")),
         SaveMetadata {
             label: "Save 1".to_string(),
             loaded: true,
         },
     );
     save_swappers[0].insert(
-        PathBuf::from(String::from(SAVE_PATH) + "/Save2"),
+        Rc::from(PathBuf::from(String::from(SAVE_PATH) + "MySummerCar/Save2")),
         SaveMetadata {
             label: "Save 2".to_string(),
             loaded: false,
@@ -141,20 +168,33 @@ fn main() -> Result<(), Box<dyn Error>> {
         else {
             break;
         };
-        let save_swapper = &save_swappers[selection];
+        let save_swapper = &mut save_swappers[selection];
 
         loop {
-            clear_screen(&term, Some(&save_swapper.name()), None)?;
-            let (keys, items): (Vec<&Path>, Vec<String>) = save_swapper
+            clear_screen(&term, Some(save_swapper.name()), None)?;
+            if save_swapper.is_empty() {
+                let confirmation = Confirm::new()
+                    .with_prompt("No saves found. Register the current one?")
+                    .interact_on(&term)
+                    .unwrap();
+                if confirmation {
+                    run_action(&term, save_swapper, Action::Create(true))?;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            let (keys, items): (Vec<&Rc<Path>>, Vec<String>) = save_swapper
                 .iter()
                 .map(|e| {
                     let loaded_str = if e.1.loaded { "X" } else { " " };
                     (
-                        e.0.as_path(),
+                        e.0,
                         String::from("[") + loaded_str + "] " + &e.1.label,
                     )
                 })
                 .collect();
+                
             let Some(selection) = Select::new()
                 .with_prompt("Select a save")
                 .items(&items)
@@ -164,14 +204,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             else {
                 break;
             };
-            let save_metadata = &save_swapper[keys[selection]];
+            let save_key = Rc::clone(keys[selection]);
+            let save_metadata = save_swapper.get(&save_key).unwrap();
 
             clear_screen(
                 &term,
-                Some(&save_swapper.name()),
+                Some(save_swapper.name()),
                 Some(&save_metadata.label),
             )?;
-            let actions = vec![Action::Toggle(save_metadata.loaded), Action::Delete];
+            let actions = [Action::Toggle(Rc::clone(&save_key), save_metadata.loaded), Action::Delete(save_key)];
             let items: Vec<String> = actions.iter().map(|action| action.to_string()).collect();
             let Some(selection) = Select::new()
                 .with_prompt("Select an action")
@@ -183,7 +224,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             };
             let action = actions[selection].clone();
-            save_swapper.run_action(&action);
+            run_action(&term, save_swapper, action)?; 
         }
     }
     Ok(())
