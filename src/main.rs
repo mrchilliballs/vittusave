@@ -12,6 +12,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt::{self, Display},
+    fs,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     rc::Rc,
@@ -24,14 +25,27 @@ pub struct SaveMetadata {
     // TODO: timestamp
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug)]
 struct SaveSwapperConfig {
     saves: BTreeMap<Rc<Path>, SaveMetadata>,
+    path: Option<PathBuf>,
+}
+impl SaveSwapperConfig {
+    fn new(path: Option<PathBuf>) -> Self {
+        SaveSwapperConfig {
+            saves: BTreeMap::new(),
+            path,
+        }
+    }
 }
 
+// TODO: game-specific settings
 trait SaveSwapper: fmt::Debug + Deref<Target = BTreeMap<Rc<Path>, SaveMetadata>> + DerefMut {
     fn display_name(&self) -> &'static str;
     fn config_filename(&self) -> &'static str;
+    fn default_dir(&self) -> Option<&Path>;
+    fn get_dir(&self) -> Option<&Path>;
+    fn set_dir(&mut self, dir: PathBuf);
     fn save(&self) -> Result<(), Box<dyn Error>>;
 }
 
@@ -46,39 +60,50 @@ fn run_action(
                 .get_mut(&path)
                 .expect("tried to load/unload a non-existant save entry");
             metadata.loaded = !metadata.loaded;
+
             // TODO: Remove hard-coded save path
-            // test1 = origin
-            // test2 = game
+            // src = origin
+            // dst = game
+            // TODO: Error handling
             if metadata.loaded {
-                utils::remove_dir_contents("/home/matheus/Documents/test2")?;
-                utils::copy_dir_all(
-                    "/home/matheus/Documents/test1",
-                    "/home/matheus/Documents/test2",
-                )?;
+                dbg!(&path);
+                dbg!(save_swapper.get_dir());
+
+                utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
+                utils::copy_dir_all(path, save_swapper.get_dir().unwrap())?;
             } else {
-                utils::remove_dir_contents("/home/matheus/Documents/test2")?;
+                utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
             }
         }
         Action::Delete(path) => {
             save_swapper.remove(&path);
+            fs::remove_dir_all(&path)?;
             save_swapper.save()?;
         }
-        Action::Create(loaded) => {
+        Action::Create(copy_src) => {
             utils::clear_screen(term, Some(save_swapper.display_name()), None)?;
             let label: String = Input::new()
                 .with_prompt("Enter save label")
                 .interact_text_on(term)
                 .unwrap();
 
-            // TODO
-            let path = Rc::from(PathBuf::from(&label));
+            let mut path =
+                PathBuf::from(dirs::document_dir().expect("Cannot find document directory"));
+            path.push("VittuSave");
+            path.push(&label);
+            let path = Rc::from(path);
 
             save_swapper.insert(
                 Rc::clone(&path),
-                SaveMetadata { label, loaded: false },
+                SaveMetadata {
+                    label,
+                    loaded: copy_src,
+                },
             );
-            if loaded {
-                run_action(term, save_swapper, Action::Toggle(path, false))?;
+            if copy_src {
+                if let Some(Ok(_)) = fs::read_dir(save_swapper.get_dir().unwrap())?.next() {
+                    utils::copy_dir_all(save_swapper.get_dir().unwrap(), path)?;
+                }
             }
             save_swapper.save()?;
         }
@@ -112,7 +137,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let term = Term::stdout();
 
     let mut save_swappers: Vec<Box<dyn SaveSwapper>> =
-        vec![Box::new(MySummerCarSaveSwapper::new()?)];
+        vec![Box::new(MySummerCarSaveSwapper::build()?)];
 
     loop {
         utils::clear_screen(&term, None, None)?;

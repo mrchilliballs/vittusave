@@ -1,6 +1,16 @@
-use std::{collections::BTreeMap, error::Error, ops::{Deref, DerefMut}, path::Path, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::LazyLock,
+};
 
-use crate::{config::{read_config, write_config}, SaveMetadata, SaveSwapper, SaveSwapperConfig};
+use crate::{
+    SaveMetadata, SaveSwapper, SaveSwapperConfig,
+    config::{read_config, write_config},
+};
 
 #[derive(Debug)]
 pub struct MySummerCarSaveSwapper {
@@ -8,13 +18,30 @@ pub struct MySummerCarSaveSwapper {
     config: SaveSwapperConfig,
 }
 
+static MSC_DEFAULT_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    let mut dir = dirs::home_dir().unwrap();
+    if cfg!(target_os = "linux") {
+        // TODO: Real Linux path
+        dir.push("Documents/test2");
+        Some(dir)
+    } else if cfg!(target_os = "windows") {
+        // TODO: Real Windows path
+        dir.push("AppData\\LocalLow\\Amistech");
+        Some(dir)
+    } else {
+        None
+    }
+});
+
 impl MySummerCarSaveSwapper {
     const DISPLAY_NAME: &str = "My Summer Car";
     const CONFIG_FILENAME: &str = "My_Summer_Car";
 
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn build() -> Result<Self, Box<dyn Error>> {
+        let config = read_config(Self::CONFIG_FILENAME)?.unwrap_or(SaveSwapperConfig::new(MSC_DEFAULT_DIR.clone()));
+
         Ok(Self {
-            config: read_config(Self::CONFIG_FILENAME)?,
+            config,
         })
     }
 }
@@ -33,7 +60,10 @@ impl DerefMut for MySummerCarSaveSwapper {
 }
 impl Drop for MySummerCarSaveSwapper {
     fn drop(&mut self) {
-        self.save().expect(&format!("failed to save \"{}\"'s configuration at drop", self.display_name()));
+        self.save().expect(&format!(
+            "failed to save \"{}\"'s configuration at drop",
+            self.display_name()
+        ));
     }
 }
 
@@ -47,5 +77,14 @@ impl SaveSwapper for MySummerCarSaveSwapper {
     fn save(&self) -> Result<(), Box<dyn Error>> {
         write_config(Self::CONFIG_FILENAME, &self.config)?;
         Ok(())
+    }
+    fn default_dir(&self) -> Option<&Path> {
+        MSC_DEFAULT_DIR.as_deref()
+    }
+    fn get_dir(&self) -> Option<&Path> {
+        self.config.path.as_deref() 
+    }
+    fn set_dir(&mut self, dir: PathBuf) {
+        let _ = self.config.path.insert(dir);
     }
 }
