@@ -69,9 +69,12 @@ fn run_action(
                 dbg!(&path);
                 dbg!(save_swapper.get_dir());
 
+                // TODO: Swap directories
                 utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
-                utils::copy_dir_all(path, save_swapper.get_dir().unwrap())?;
+                utils::copy_dir_all(&path, save_swapper.get_dir().unwrap())?;
             } else {
+                utils::remove_dir_contents(&path)?;
+                utils::copy_dir_all(save_swapper.get_dir().unwrap(), path)?;
                 utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
             }
         }
@@ -185,13 +188,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 continue;
             }
-            let (keys, items): (Vec<&Rc<Path>>, Vec<String>) = save_swapper
+            let (keys, mut items): (Vec<&Rc<Path>>, Vec<String>) = save_swapper
                 .iter()
                 .map(|e| {
                     let loaded_str = if e.1.loaded { "X" } else { " " };
                     (e.0, String::from("[") + loaded_str + "] " + &e.1.label)
                 })
                 .collect();
+            items.push(String::from("New"));
 
             let Some(selection) = Select::new()
                 .with_prompt("Select a save")
@@ -202,6 +206,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             else {
                 break;
             };
+            if items[selection] == "New" {
+                run_action(&term, save_swapper, Action::Create(false))?;
+                continue;
+            }
             let save_key = Rc::clone(keys[selection]);
             let save_metadata = save_swapper.get(&save_key).unwrap();
 
