@@ -93,6 +93,7 @@ fn run_action(
             let mut path =
                 PathBuf::from(dirs::document_dir().expect("Cannot find document directory"));
             path.push("VittuSave");
+            path.push(save_swapper.display_name());
             path.push(&label);
             let path = Rc::from(path);
 

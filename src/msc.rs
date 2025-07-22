@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     error::Error,
+    fs,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     rc::Rc,
@@ -18,15 +19,20 @@ pub struct MySummerCarSaveSwapper {
     config: SaveSwapperConfig,
 }
 
+const MSC_LINUX: &str = ".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car";
+const MSC_FLATPAK_STEAM: &str = ".var/app/com.valvesoftware.Steam";
 static MSC_DEFAULT_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
     let mut dir = dirs::home_dir().unwrap();
     if cfg!(target_os = "linux") {
+        if fs::exists(dir.join(MSC_FLATPAK_STEAM)).is_ok_and(|result| result) {
+            dir.push(MSC_FLATPAK_STEAM);
+        }
+        dir.push(MSC_LINUX);
         // TODO: Real Linux path
-        dir.push("Documents/test2");
         Some(dir)
     } else if cfg!(target_os = "windows") {
         // TODO: Real Windows path
-        dir.push("AppData\\LocalLow\\Amistech");
+        dir.push("AppData\\LocalLow\\Amistech\\My Summer Car");
         Some(dir)
     } else {
         None
@@ -38,11 +44,10 @@ impl MySummerCarSaveSwapper {
     const CONFIG_FILENAME: &str = "My_Summer_Car";
 
     pub fn build() -> Result<Self, Box<dyn Error>> {
-        let config = read_config(Self::CONFIG_FILENAME)?.unwrap_or(SaveSwapperConfig::new(MSC_DEFAULT_DIR.clone()));
+        let config = read_config(Self::CONFIG_FILENAME)?
+            .unwrap_or(SaveSwapperConfig::new(MSC_DEFAULT_DIR.clone()));
 
-        Ok(Self {
-            config,
-        })
+        Ok(Self { config })
     }
 }
 
@@ -82,7 +87,7 @@ impl SaveSwapper for MySummerCarSaveSwapper {
         MSC_DEFAULT_DIR.as_deref()
     }
     fn get_dir(&self) -> Option<&Path> {
-        self.config.path.as_deref() 
+        self.config.path.as_deref()
     }
     fn set_dir(&mut self, dir: PathBuf) {
         let _ = self.config.path.insert(dir);
