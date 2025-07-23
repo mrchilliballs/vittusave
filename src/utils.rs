@@ -29,6 +29,7 @@ pub fn remove_dir_contents(path: impl AsRef<Path>) -> io::Result<()> {
 pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
     fs::create_dir_all(&src)?;
     fs::create_dir_all(&dst)?;
+    
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;

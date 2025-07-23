@@ -1,154 +1,242 @@
 // TODO: Do some sort of integrity check before loading saves
 
 mod config;
-mod msc;
 mod utils;
 
 use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
-use msc::MySummerCarSaveSwapper;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     error::Error,
-    fmt::{self, Display},
     fs,
-    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
-    rc::Rc,
+    sync::LazyLock,
 };
+use strum::VariantArray as _;
+use strum_macros::{Display, VariantArray};
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SaveMetadata {
-    pub label: String,
-    pub loaded: bool,
-    // TODO: timestamp
+// TOOD: Proper error handling
+pub static HOME_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| dirs::home_dir().expect("no home directory found"));
+    static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| dirs::config_dir().expect("no config directory found").join("VittuSave"));
+pub static STEAM_PKG_PATH: LazyLock<PathBuf> = LazyLock::new(|| HOME_DIR.join(PathBuf::from(".steam")));
+pub static STEAM_FLATPAK_HOME: LazyLock<PathBuf> =
+    LazyLock::new(|| HOME_DIR.join(PathBuf::from(".var/app/com.valvesoftware.Steam")));
+pub static STEAM_LINUX_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
+    if cfg!(target_os = "linux") {
+        let steam_package_installed = fs::exists(STEAM_PKG_PATH.as_path()).unwrap_or_default();
+        let steam_flatpak_installed = fs::exists(STEAM_FLATPAK_HOME.as_path()).unwrap_or_default();
+
+        if steam_package_installed {
+            HOME_DIR.to_path_buf()
+        } else if steam_flatpak_installed {
+            STEAM_FLATPAK_HOME.to_path_buf()
+        } else {
+            // Steam is not installed to the default path, for some reason
+            HOME_DIR.to_path_buf()
+        }
+    } else {
+        PathBuf::new()
+    }
+});
+// TODO: Separate configs into separate files possibly
+pub const CONFIG_FILENAME: &str = "vittusave";
+
+// TODO: Support copying between multiple paths
+static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
+    HashMap::from([
+        #[cfg(target_os = "linux")]
+        (
+            Game::MySummerCar,
+            Some([STEAM_LINUX_HOME.to_path_buf(), PathBuf::from(".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car")]
+            .iter()
+            .collect()),
+        ),
+        #[cfg(target_os = "windows")]
+        (
+            Game::MySummerCar,
+            Some([HOME_DIR.to_path_buf(), PathBuf::from("AppData\\LocalLow\\Amistech\\My Summer Car")]
+            .iter()
+            .collect()),
+        ),
+    ])
+});
+// TODO
+pub static SAVE_SLOT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+    dirs::document_dir()
+        .expect("no document directory found")
+        .join("VittuSave")
+});
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SaveSlot {
+    label: String,
+    path: PathBuf,
+    loaded: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct SaveSwapperConfig {
-    saves: BTreeMap<Rc<Path>, SaveMetadata>,
-    path: Option<PathBuf>,
+impl SaveSlot {
+   pub fn new(label: &str) -> Self {
+        SaveSlot {
+            label: label.to_string(),
+            path: [SAVE_SLOT_PATH.clone(), PathBuf::from(label)]
+                .iter()
+                .collect(),
+            loaded: false,
+        }
+    }
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+    pub fn loaded(&self) -> bool {
+        self.loaded
+    }
+    pub fn path(&self) -> &Path {
+        dbg!(&self.path);
+        &self.path
+    }
 }
-impl SaveSwapperConfig {
-    fn new(path: Option<PathBuf>) -> Self {
-        SaveSwapperConfig {
-            saves: BTreeMap::new(),
-            path,
+
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy, VariantArray, Display, Serialize, Deserialize)]
+enum Game {
+    #[strum(to_string = "My Summer Car")]
+    MySummerCar,
+    // Undertale,
+}
+
+// TODO: game-specific settings
+#[derive(Debug, Serialize, Deserialize)]
+struct SaveSwapper {
+    save_slots: HashMap<Game, Vec<SaveSlot>>,
+}
+impl Default for SaveSwapper {
+    fn default() -> Self {
+        Self {
+            save_slots: HashMap::from([(Game::MySummerCar, Vec::new())]),
         }
     }
 }
 
-// TODO: game-specific settings
-trait SaveSwapper: fmt::Debug + Deref<Target = BTreeMap<Rc<Path>, SaveMetadata>> + DerefMut {
-    fn display_name(&self) -> &'static str;
-    fn config_filename(&self) -> &'static str;
-    fn default_dir(&self) -> Option<&Path>;
-    fn get_dir(&self) -> Option<&Path>;
-    fn set_dir(&mut self, dir: PathBuf);
-    fn save(&self) -> Result<(), Box<dyn Error>>;
+impl Drop for SaveSwapper {
+    fn drop(&mut self) {
+        // TODO: What to do here?
+       self.save().unwrap();
+    }
 }
 
-fn run_action(
-    term: &Term,
-    save_swapper: &mut Box<dyn SaveSwapper>,
-    action: Action,
-) -> Result<(), Box<dyn Error>> {
-    match action {
-        Action::Toggle(path, _) => {
-            let metadata = save_swapper
-                .get_mut(&path)
-                .expect("tried to load/unload a non-existant save entry");
-            metadata.loaded = !metadata.loaded;
+impl SaveSwapper {
+    pub fn build() -> Result<Self, Box<dyn Error>> {
+        let config = config::read_config(CONFIG_FILENAME)?;
 
-            // TODO: Remove hard-coded save path
-            // src = origin
-            // dst = game
-            // TODO: Error handling
-            if metadata.loaded {
-                dbg!(&path);
-                dbg!(save_swapper.get_dir());
-
-                // TODO: Swap directories
-                utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
-                utils::copy_dir_all(&path, save_swapper.get_dir().unwrap())?;
-            } else {
-                utils::remove_dir_contents(&path)?;
-                utils::copy_dir_all(save_swapper.get_dir().unwrap(), path)?;
-                utils::remove_dir_contents(save_swapper.get_dir().unwrap())?;
-            }
+        if let Some(config) = config {
+            Ok(config)
+        } else {
+            let config = config.unwrap_or_default();
+            config.save()?;
+            Ok(config)
         }
-        Action::Delete(path) => {
-            save_swapper.remove(&path);
-            fs::remove_dir_all(&path)?;
-            save_swapper.save()?;
-        }
-        Action::Create(copy_src) => {
-            utils::clear_screen(term, Some(save_swapper.display_name()), None)?;
-            let label: String = Input::new()
-                .with_prompt("Enter save label")
-                .interact_text_on(term)
-                .unwrap();
+    }
+    fn save(&self) -> Result<(), Box<dyn Error>>{
+        config::write_config(CONFIG_FILENAME, self)?;
+        Ok(())
+    }
+    pub fn get(&self, game: Game) -> &Vec<SaveSlot> {
+        assert!(self.save_slots.contains_key(&game));
 
-            let mut path =
-                PathBuf::from(dirs::document_dir().expect("Cannot find document directory"));
-            path.push("VittuSave");
-            path.push(save_swapper.display_name());
-            path.push(&label);
-            let path = Rc::from(path);
+        self.save_slots.get(&game).unwrap()
+    }
+    pub fn is_empty(&self, game: Game) -> bool {
+        assert!(self.save_slots.contains_key(&game));
 
-            save_swapper.insert(
-                Rc::clone(&path),
-                SaveMetadata {
-                    label,
-                    loaded: copy_src,
-                },
-            );
-            if copy_src {
-                if let Some(Ok(_)) = fs::read_dir(save_swapper.get_dir().unwrap())?.next() {
-                    utils::copy_dir_all(save_swapper.get_dir().unwrap(), path)?;
-                }
-            }
-            save_swapper.save()?;
-        }
-    };
-    Ok(())
-}
+        self.save_slots.get(&game).unwrap().is_empty()
+    }
+    pub fn create(&mut self, game: Game, label: &str) -> Result<usize, Box<dyn Error>> {
+        assert!(self.save_slots.contains_key(&game));
 
-#[derive(Debug, Clone)]
-enum Action {
-    Toggle(Rc<Path>, bool),
-    Delete(Rc<Path>),
-    Create(bool),
-}
-impl Display for Action {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self {
-            Action::Toggle(_, loaded) => {
-                if *loaded {
-                    write!(f, "Unload")
-                } else {
-                    write!(f, "Load")
-                }
-            }
-            Action::Delete(_) => write!(f, "{}", style("Delete").red()),
-            Action::Create(_) => write!(f, "{}", style("Create").green()),
+        let save_slot = SaveSlot::new(label);
+        fs::create_dir_all(save_slot.path())?;
+        let save_slots = self.save_slots.get_mut(&game).unwrap();
+        save_slots.push(save_slot);
+        
+        let len = save_slots.len();
+        
+        self.save()?;
+        Ok(len - 1)
+    }
+    pub fn import(&mut self, game: Game, label: &str) -> Result<(), Box<dyn Error>> {
+        assert!(GAME_PATHS.contains_key(&game));
+        assert!(self.save_slots.get(&game).unwrap().is_empty());
+
+        let index_slot = self.create(game, label)?;
+        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index_slot];
+
+        // TODO: Custom game paths and error handling
+        utils::copy_dir_all(
+            GAME_PATHS.get(&game).unwrap().as_deref().unwrap(),
+            save_slot.path(),
+        )?;
+        save_slot.loaded = true;
+
+        self.save()?;
+        Ok(())
+    }
+    // TODO: Don't forget confirmation on the UI side
+    pub fn delete(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.save_slots.contains_key(&game));
+
+        // Note: panics
+
+        let save_slot = self.save_slots.get_mut(&game).unwrap().remove(index);
+        if save_slot.loaded() {
+            utils::remove_dir_contents(GAME_PATHS.get(&game).unwrap().as_deref().unwrap())?;
         }
+        fs::remove_dir_all(save_slot.path())?;
+
+        self.save()?;
+        Ok(())
+    }
+    fn load(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.save_slots.contains_key(&game));
+        assert!(!self.save_slots.get(&game).unwrap()[index].loaded());
+
+        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
+        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
+
+        utils::remove_dir_contents(real_save_path)?;
+        utils::copy_dir_all(save_slot.path(), real_save_path)?;
+        save_slot.loaded = true;
+
+        self.save()?;
+        Ok(())
+    }
+    fn unload(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.save_slots.contains_key(&game));
+        assert!(self.save_slots.get(&game).unwrap()[index].loaded());
+
+        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
+        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
+
+        utils::copy_dir_all(real_save_path, save_slot.path())?;
+        utils::remove_dir_contents(real_save_path)?;
+        save_slot.loaded = false;
+
+        self.save()?;
+        Ok(())
     }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let term = Term::stdout();
 
-    let mut save_swappers: Vec<Box<dyn SaveSwapper>> =
-        vec![Box::new(MySummerCarSaveSwapper::build()?)];
+    let mut save_swapper: SaveSwapper = SaveSwapper::build()?;
 
     loop {
         utils::clear_screen(&term, None, None)?;
-        let items: Vec<&'static str> = save_swappers
+        let items: Vec<String> = Game::VARIANTS
             .iter()
-            .map(|e| e.display_name())
-            .chain(["Settings"])
+            .map(|game| game.to_string())
+            .chain([String::from("Settings")])
             .collect();
         let Some(selection) = Select::new()
             .with_prompt("Menu")
@@ -162,7 +250,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if items[selection] == "Settings" {
             utils::clear_screen(&term, None, None)?;
             let items = ["Dummy 1", "Dummy 2"];
-            let Some(selection) = Select::new()
+            let Some(_selection) = Select::new()
                 .with_prompt("Settings")
                 .items(&items)
                 .default(0)
@@ -173,30 +261,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             };
             // Go to setting page...
         }
-        let save_swapper = &mut save_swappers[selection];
+        let game = Game::VARIANTS[selection];
+        // let save_slots = save_swapper.get(game);
 
         loop {
-            utils::clear_screen(&term, Some(save_swapper.display_name()), None)?;
-            if save_swapper.is_empty() {
+            utils::clear_screen(&term, Some(&game.to_string()), None)?;
+            if save_swapper.is_empty(game) {
                 let confirmation = Confirm::new()
                     .with_prompt("No saves found. Register the current one?")
                     .interact_on(&term)
                     .unwrap();
                 if confirmation {
-                    run_action(&term, save_swapper, Action::Create(true))?;
+                    // TODO: Deduplicate code
+                    let label: String = Input::new()
+                        .with_prompt("Enter save label")
+                        .interact_text_on(&term)
+                        .unwrap();
+                    save_swapper.import(game, &label)?;
                 } else {
                     break;
                 }
                 continue;
             }
-            let (keys, mut items): (Vec<&Rc<Path>>, Vec<String>) = save_swapper
+            let items: Vec<String> = save_swapper
+                .get(game)
                 .iter()
-                .map(|e| {
-                    let loaded_str = if e.1.loaded { "X" } else { " " };
-                    (e.0, String::from("[") + loaded_str + "] " + &e.1.label)
+                .map(|slot| {
+                    let loaded_str = if slot.loaded() { "X" } else { " " };
+                    String::from("[") + loaded_str + "] " + slot.label()
                 })
+                .chain([String::from("New")])
                 .collect();
-            items.push(String::from("New"));
 
             let Some(selection) = Select::new()
                 .with_prompt("Select a save")
@@ -208,22 +303,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             };
             if items[selection] == "New" {
-                run_action(&term, save_swapper, Action::Create(false))?;
+                // TODO: Deduplicate code
+                let label: String = Input::new()
+                    .with_prompt("Enter save label")
+                    .interact_text_on(&term)
+                    .unwrap();
+                save_swapper.create(game, &label)?;
                 continue;
             }
-            let save_key = Rc::clone(keys[selection]);
-            let save_metadata = save_swapper.get(&save_key).unwrap();
+            let save_slot_index = selection;
 
             utils::clear_screen(
                 &term,
-                Some(save_swapper.display_name()),
-                Some(&save_metadata.label),
+                Some(&game.to_string()),
+                Some(save_swapper.get(game)[save_slot_index].label()),
             )?;
-            let actions = [
-                Action::Toggle(Rc::clone(&save_key), save_metadata.loaded),
-                Action::Delete(save_key),
-            ];
-            let items: Vec<String> = actions.iter().map(|action| action.to_string()).collect();
+            let mut items: Vec<&'static str> = vec![];
+            let save_slot_loaded = save_swapper.get(game)[save_slot_index].loaded();
+            if save_slot_loaded {
+                items.push("Unload");
+            } else {
+                items.push("Load");
+            }
+            items.push("Delete");
             let Some(selection) = Select::new()
                 .with_prompt("Select an action")
                 .items(&items)
@@ -233,8 +335,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             else {
                 continue;
             };
-            let action = actions[selection].clone();
-            run_action(&term, save_swapper, action)?;
+            match items[selection] {
+                "Load" => save_swapper.load(game, save_slot_index)?,
+                "Unload" => save_swapper.unload(game, save_slot_index)?,
+                "Delete" => {
+                    utils::clear_screen(
+                        &term,
+                        Some(&game.to_string()),
+                        Some(save_swapper.get(game)[save_slot_index].label()),
+                    )?;
+                    let confirmation = Confirm::new()
+                        .with_prompt(format!("Are you sure you want to {} delete \"{}\"?", style("permanently").red(), save_swapper.get(game)[save_slot_index].label()))
+                        .interact_on(&term)
+                        .unwrap();
+                    if confirmation {
+                        save_swapper.delete(game, save_slot_index)?;
+                    } 
+                }
+                _ => unreachable!(),
+                }
         }
     }
     Ok(())

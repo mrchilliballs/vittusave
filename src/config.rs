@@ -2,19 +2,13 @@ use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
-    sync::LazyLock,
 };
 
 use serde::{Serialize, de::DeserializeOwned};
 
-static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    [
-        dirs::config_local_dir().expect("user’s config directory not found"),
-        PathBuf::from("VittuSave"),
-    ]
-    .iter()
-    .collect()
-});
+use crate::CONFIG_DIR;
+
+// Note: Config = save struct idk why
 
 fn make_config_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = CONFIG_DIR.clone();
