@@ -1,4 +1,6 @@
 // TODO: Do some sort of integrity check before loading saves
+// TODO: Steam Cloud support (info UT favorites)
+// TODO: Docs
 
 mod config;
 mod utils;
@@ -7,9 +9,9 @@ use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, error::Error, fs, iter, path::{Path, PathBuf}, sync::LazyLock
+    collections::HashMap, error::Error, fs, path::{Path, PathBuf}, sync::LazyLock
 };
-use strum::{IntoEnumIterator, VariantArray};
+use strum::VariantArray;
 use strum_macros::{Display, EnumIter, VariantArray};
 
 #[derive(
@@ -55,6 +57,7 @@ pub static STEAM_LINUX_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
 pub const CONFIG_FILENAME: &str = "vittusave";
 
 // TODO: Support copying between multiple paths
+// FIXME: Check if the path still exists before even trying anything
 static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
     HashMap::from([
         #[cfg(target_os = "linux")]
@@ -78,9 +81,10 @@ static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
             .iter()
             .collect()),
         )
+        // TODO: Other OS paths
     ])
 });
-// TODO
+// FIXME
 pub static SAVE_SLOT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     dirs::document_dir()
         .expect("no document directory found")
@@ -94,10 +98,10 @@ pub struct SaveSlot {
 }
 
 impl SaveSlot {
-    pub fn new(label: &str) -> Self {
+    pub fn new(label: &str, game_name: &str) -> Self {
         SaveSlot {
             label: label.to_string(),
-            path: [SAVE_SLOT_PATH.clone(), PathBuf::from(label)]
+            path: [SAVE_SLOT_PATH.clone(), PathBuf::from(game_name), PathBuf::from(label)]
                 .iter()
                 .collect(),
         }
@@ -137,11 +141,12 @@ impl Default for SaveSwapper {
 
 impl Drop for SaveSwapper {
     fn drop(&mut self) {
-        // TODO: What to do here?
+        // FIXME: What to do here?
         let _ = self.save();
     }
 }
 
+// TODO: Reorder functionallity
 impl SaveSwapper {
     pub fn build() -> Result<Self, Box<dyn Error>> {
         let config = config::read_config(CONFIG_FILENAME)?;
@@ -176,7 +181,7 @@ impl SaveSwapper {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
 
-        let save_slot = SaveSlot::new(label);
+        let save_slot = SaveSlot::new(label, &game.to_string());
         fs::create_dir_all(save_slot.path())?;
         let save_slots = self.save_slots.get_mut(&game).unwrap();
         save_slots.push(save_slot);
@@ -186,7 +191,8 @@ impl SaveSwapper {
         self.save()?;
         Ok(len - 1)
     }
-    // TODO: Import from folder
+    // TODO: Add import from folder intrsuctions
+    // FIXME: Do something about empty imports, will panic right now
     pub fn import(&mut self, game: Game, label: &str) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.get(&game).unwrap().is_empty());
@@ -195,12 +201,13 @@ impl SaveSwapper {
         let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index_slot];
 
         // TODO: Custom game paths and error handling
+        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
         utils::copy_dir_all(
-            GAME_PATHS.get(&game).unwrap().as_deref().unwrap(),
-            save_slot.path(),
+                real_save_path,
+            save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()),
         )?;
         // TODO: Use setter instead
-        *self.loaded_slots.get_mut(&game).unwrap() = Some(index_slot);
+        self.loaded_slots.get_mut(&game).unwrap().replace(index_slot);
 
         self.save()?;
         Ok(())
@@ -217,7 +224,6 @@ impl SaveSwapper {
         self.save()?;
         Ok(())
     }
-    // TODO: Don't forget confirmation on the UI side
     pub fn delete(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
@@ -241,8 +247,8 @@ impl SaveSwapper {
         let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
 
         utils::remove_dir_contents(real_save_path)?;
-        utils::copy_dir_all(save_slot.path(), real_save_path)?;
-        *self.loaded_slots.get_mut(&game).unwrap() = Some(index);
+        utils::copy_dir_all(save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()), real_save_path)?;
+        self.loaded_slots.get_mut(&game).unwrap().replace(index);
 
         self.save()?;
         Ok(())
@@ -255,9 +261,9 @@ impl SaveSwapper {
         let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
         let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
 
-        utils::copy_dir_all(real_save_path, save_slot.path())?;
+        utils::copy_dir_all(real_save_path, save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()))?;
         utils::remove_dir_contents(real_save_path)?;
-        *self.loaded_slots.get_mut(&game).unwrap() = None;
+        self.loaded_slots.get_mut(&game).unwrap().take();
 
         self.save()?;
         Ok(())
@@ -312,7 +318,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         if !save_swapper.is_os_supported(game) {
             continue;
         }
-        // let save_slots = save_swapper.get(game);
 
         loop {
             utils::clear_screen(&term, Some(&game.to_string()), None)?;
