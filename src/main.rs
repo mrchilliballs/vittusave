@@ -91,7 +91,6 @@ pub static SAVE_SLOT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
 pub struct SaveSlot {
     label: String,
     path: PathBuf,
-    loaded: bool,
 }
 
 impl SaveSlot {
@@ -101,14 +100,10 @@ impl SaveSlot {
             path: [SAVE_SLOT_PATH.clone(), PathBuf::from(label)]
                 .iter()
                 .collect(),
-            loaded: false,
         }
     }
     pub fn label(&self) -> &str {
         &self.label
-    }
-    pub fn loaded(&self) -> bool {
-        self.loaded
     }
     pub fn set_label(&mut self, new_label: &str) {
         self.label = new_label.to_string();
@@ -123,6 +118,7 @@ impl SaveSlot {
 #[derive(Debug, Serialize, Deserialize)]
 struct SaveSwapper {
     save_slots: HashMap<Game, Vec<SaveSlot>>,
+    loaded_slots: HashMap<Game, Option<usize>>,
 }
 impl Default for SaveSwapper {
     fn default() -> Self {
@@ -130,6 +126,10 @@ impl Default for SaveSwapper {
             save_slots: Game::VARIANTS
             .iter()
             .map(|game| (*game, Vec::new()))
+            .collect(),
+            loaded_slots: Game::VARIANTS
+            .iter()
+            .map(|game| (*game, None))
             .collect(),
         }
     }
@@ -200,7 +200,7 @@ impl SaveSwapper {
             save_slot.path(),
         )?;
         // TODO: Use setter instead
-        save_slot.loaded = true;
+        *self.loaded_slots.get_mut(&game).unwrap() = Some(index_slot);
 
         self.save()?;
         Ok(())
@@ -224,7 +224,7 @@ impl SaveSwapper {
         assert!(self.save_slots.get(&game).unwrap().len() > index);
 
         let save_slot = self.save_slots.get_mut(&game).unwrap().remove(index);
-        if save_slot.loaded() {
+        if self.is_loaded(game, index) {
             utils::remove_dir_contents(GAME_PATHS.get(&game).unwrap().as_deref().unwrap())?;
         }
         fs::remove_dir_all(save_slot.path())?;
@@ -232,35 +232,40 @@ impl SaveSwapper {
         self.save()?;
         Ok(())
     }
-    fn load(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+    pub fn load(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
-        assert!(!self.save_slots.get(&game).unwrap()[index].loaded());
+        assert!(!self.is_loaded(game, index));
 
         let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
         let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
 
         utils::remove_dir_contents(real_save_path)?;
         utils::copy_dir_all(save_slot.path(), real_save_path)?;
-        save_slot.loaded = true;
+        *self.loaded_slots.get_mut(&game).unwrap() = Some(index);
 
         self.save()?;
         Ok(())
     }
-    fn unload(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+    pub fn unload(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
-        assert!(self.save_slots.get(&game).unwrap()[index].loaded());
+        assert!(self.is_loaded(game, index));
 
         let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
         let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
 
         utils::copy_dir_all(real_save_path, save_slot.path())?;
         utils::remove_dir_contents(real_save_path)?;
-        save_slot.loaded = false;
+        *self.loaded_slots.get_mut(&game).unwrap() = None;
 
         self.save()?;
         Ok(())
+    }
+    pub fn is_loaded(&self, game: Game, index: usize) -> bool{
+        assert!(self.save_slots.contains_key(&game));
+
+        self.loaded_slots.get(&game).unwrap().is_some_and(|i| i == index)
     }
 }
 
@@ -329,9 +334,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             let items: Vec<String> = save_swapper
                 .get(game)
                 .iter()
-                .map(|slot| {
-                    let loaded_str = if slot.loaded() { "X" } else { " " };
-                    String::from("[") + loaded_str + "] " + slot.label()
+                .enumerate()
+                .map(|e| {
+                    let loaded_str = if save_swapper.is_loaded(game, e.0) { "X" } else { " " };
+                    String::from("[") + loaded_str + "] " + e.1.label()
                 })
                 .chain([String::from("New")])
                 .collect();
@@ -361,7 +367,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Some(save_swapper.get(game)[save_slot_index].label()),
             )?;
             let mut items: Vec<&'static str> = vec![];
-            let save_slot_loaded = save_swapper.get(game)[save_slot_index].loaded();
+            let save_slot_loaded = save_swapper.is_loaded(game, save_slot_index);
             if save_slot_loaded {
                 items.push("Unload");
             } else {
