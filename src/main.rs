@@ -7,20 +7,31 @@ use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
-    error::Error,
-    fs,
-    path::{Path, PathBuf},
-    sync::LazyLock,
+    collections::HashMap, error::Error, fs, iter, path::{Path, PathBuf}, sync::LazyLock
 };
-use strum::VariantArray as _;
-use strum_macros::{Display, VariantArray};
+use strum::{IntoEnumIterator, VariantArray};
+use strum_macros::{Display, EnumIter, VariantArray};
+
+#[derive(
+    Hash, Eq, PartialEq, Debug, Clone, Copy, VariantArray, Display, Serialize, Deserialize, EnumIter
+)]
+enum Game {
+    #[strum(to_string = "My Summer Car")]
+    MySummerCar,
+    #[strum(to_string = "UNDERTALE")]
+    Undertale,
+}
 
 // TOOD: Proper error handling
 pub static HOME_DIR: LazyLock<PathBuf> =
     LazyLock::new(|| dirs::home_dir().expect("no home directory found"));
-    static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| dirs::config_dir().expect("no config directory found").join("VittuSave"));
-pub static STEAM_PKG_PATH: LazyLock<PathBuf> = LazyLock::new(|| HOME_DIR.join(PathBuf::from(".steam")));
+static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    dirs::config_dir()
+        .expect("no config directory found")
+        .join("VittuSave")
+});
+pub static STEAM_PKG_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| HOME_DIR.join(PathBuf::from(".steam")));
 pub static STEAM_FLATPAK_HOME: LazyLock<PathBuf> =
     LazyLock::new(|| HOME_DIR.join(PathBuf::from(".var/app/com.valvesoftware.Steam")));
 pub static STEAM_LINUX_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -49,7 +60,7 @@ static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
         #[cfg(target_os = "linux")]
         (
             Game::MySummerCar,
-            Some([STEAM_LINUX_HOME.to_path_buf(), PathBuf::from(".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car")]
+            Some([STEAM_LINUX_HOME.clone(), PathBuf::from(".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car")]
             .iter()
             .collect()),
         ),
@@ -60,6 +71,13 @@ static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
             .iter()
             .collect()),
         ),
+        #[cfg(target_os = "linux")]
+        (
+            Game::Undertale,
+            Some([STEAM_LINUX_HOME.clone(), PathBuf::from(".config/UNDERTALE")]
+            .iter()
+            .collect()),
+        )
     ])
 });
 // TODO
@@ -77,7 +95,7 @@ pub struct SaveSlot {
 }
 
 impl SaveSlot {
-   pub fn new(label: &str) -> Self {
+    pub fn new(label: &str) -> Self {
         SaveSlot {
             label: label.to_string(),
             path: [SAVE_SLOT_PATH.clone(), PathBuf::from(label)]
@@ -98,13 +116,6 @@ impl SaveSlot {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy, VariantArray, Display, Serialize, Deserialize)]
-enum Game {
-    #[strum(to_string = "My Summer Car")]
-    MySummerCar,
-    // Undertale,
-}
-
 // TODO: game-specific settings
 #[derive(Debug, Serialize, Deserialize)]
 struct SaveSwapper {
@@ -113,7 +124,10 @@ struct SaveSwapper {
 impl Default for SaveSwapper {
     fn default() -> Self {
         Self {
-            save_slots: HashMap::from([(Game::MySummerCar, Vec::new())]),
+            save_slots: Game::VARIANTS
+            .iter()
+            .map(|game| (*game, Vec::new()))
+            .collect(),
         }
     }
 }
@@ -121,7 +135,7 @@ impl Default for SaveSwapper {
 impl Drop for SaveSwapper {
     fn drop(&mut self) {
         // TODO: What to do here?
-       self.save().unwrap();
+        let _ = self.save();
     }
 }
 
@@ -137,9 +151,12 @@ impl SaveSwapper {
             Ok(config)
         }
     }
-    fn save(&self) -> Result<(), Box<dyn Error>>{
+    fn save(&self) -> Result<(), Box<dyn Error>> {
         config::write_config(CONFIG_FILENAME, self)?;
         Ok(())
+    }
+    pub fn is_os_supported(&self, game: Game) -> bool {
+        GAME_PATHS.contains_key(&game)
     }
     pub fn get(&self, game: Game) -> &Vec<SaveSlot> {
         assert!(self.save_slots.contains_key(&game));
@@ -147,25 +164,27 @@ impl SaveSwapper {
         self.save_slots.get(&game).unwrap()
     }
     pub fn is_empty(&self, game: Game) -> bool {
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
 
         self.save_slots.get(&game).unwrap().is_empty()
     }
     pub fn create(&mut self, game: Game, label: &str) -> Result<usize, Box<dyn Error>> {
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
 
         let save_slot = SaveSlot::new(label);
         fs::create_dir_all(save_slot.path())?;
         let save_slots = self.save_slots.get_mut(&game).unwrap();
         save_slots.push(save_slot);
-        
+
         let len = save_slots.len();
-        
+
         self.save()?;
         Ok(len - 1)
     }
     pub fn import(&mut self, game: Game, label: &str) -> Result<(), Box<dyn Error>> {
-        assert!(GAME_PATHS.contains_key(&game));
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.get(&game).unwrap().is_empty());
 
         let index_slot = self.create(game, label)?;
@@ -183,6 +202,7 @@ impl SaveSwapper {
     }
     // TODO: Don't forget confirmation on the UI side
     pub fn delete(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
 
         // Note: panics
@@ -197,6 +217,7 @@ impl SaveSwapper {
         Ok(())
     }
     fn load(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
         assert!(!self.save_slots.get(&game).unwrap()[index].loaded());
 
@@ -211,6 +232,7 @@ impl SaveSwapper {
         Ok(())
     }
     fn unload(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
+        assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
         assert!(self.save_slots.get(&game).unwrap()[index].loaded());
 
@@ -235,7 +257,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         utils::clear_screen(&term, None, None)?;
         let items: Vec<String> = Game::VARIANTS
             .iter()
-            .map(|game| game.to_string())
+            .map(|game| {
+                if save_swapper.is_os_supported(*game) {
+                    game.to_string()
+                } else {
+                    style(game).red().to_string()
+                }
+            })
             .chain([String::from("Settings")])
             .collect();
         let Some(selection) = Select::new()
@@ -262,6 +290,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Go to setting page...
         }
         let game = Game::VARIANTS[selection];
+        if !save_swapper.is_os_supported(game) {
+            continue;
+        }
         // let save_slots = save_swapper.get(game);
 
         loop {
@@ -345,15 +376,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Some(save_swapper.get(game)[save_slot_index].label()),
                     )?;
                     let confirmation = Confirm::new()
-                        .with_prompt(format!("Are you sure you want to {} delete \"{}\"?", style("permanently").red(), save_swapper.get(game)[save_slot_index].label()))
+                        .with_prompt(format!(
+                            "Are you sure you want to {} delete \"{}\"?",
+                            style("permanently").red(),
+                            save_swapper.get(game)[save_slot_index].label()
+                        ))
                         .interact_on(&term)
                         .unwrap();
                     if confirmation {
                         save_swapper.delete(game, save_slot_index)?;
-                    } 
+                    }
                 }
                 _ => unreachable!(),
-                }
+            }
         }
     }
     Ok(())
