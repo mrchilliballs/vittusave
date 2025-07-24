@@ -110,8 +110,11 @@ impl SaveSlot {
     pub fn loaded(&self) -> bool {
         self.loaded
     }
+    pub fn set_label(&mut self, new_label: &str) {
+        self.label = new_label.to_string();
+        self.path.set_file_name(new_label);
+    }
     pub fn path(&self) -> &Path {
-        dbg!(&self.path);
         &self.path
     }
 }
@@ -183,6 +186,7 @@ impl SaveSwapper {
         self.save()?;
         Ok(len - 1)
     }
+    // TODO: Import from folder
     pub fn import(&mut self, game: Game, label: &str) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.get(&game).unwrap().is_empty());
@@ -195,7 +199,20 @@ impl SaveSwapper {
             GAME_PATHS.get(&game).unwrap().as_deref().unwrap(),
             save_slot.path(),
         )?;
+        // TODO: Use setter instead
         save_slot.loaded = true;
+
+        self.save()?;
+        Ok(())
+    }
+    pub fn rename(&mut self, game: Game, index: usize, new_label: &str) -> Result<(), Box<dyn Error>> {
+        assert!(self.is_os_supported(game));
+        assert!(self.save_slots.contains_key(&game));
+        assert!(self.save_slots.get(&game).unwrap().len() > index);
+
+        let save_slot  = &mut self.save_slots.get_mut(&game).unwrap()[index];
+        fs::rename(save_slot.path(), save_slot.path().with_file_name(new_label))?;
+        save_slot.set_label(new_label);
 
         self.save()?;
         Ok(())
@@ -204,8 +221,7 @@ impl SaveSwapper {
     pub fn delete(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
         assert!(self.is_os_supported(game));
         assert!(self.save_slots.contains_key(&game));
-
-        // Note: panics
+        assert!(self.save_slots.get(&game).unwrap().len() > index);
 
         let save_slot = self.save_slots.get_mut(&game).unwrap().remove(index);
         if save_slot.loaded() {
@@ -270,8 +286,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_prompt("Menu")
             .items(&items)
             .default(0)
-            .interact_on_opt(&term)
-            .unwrap()
+            .interact_on_opt(&term)?
         else {
             break;
         };
@@ -282,8 +297,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .with_prompt("Settings")
                 .items(&items)
                 .default(0)
-                .interact_on_opt(&term)
-                .unwrap()
+                .interact_on_opt(&term)?
             else {
                 continue;
             };
@@ -300,14 +314,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             if save_swapper.is_empty(game) {
                 let confirmation = Confirm::new()
                     .with_prompt("No saves found. Register the current one?")
-                    .interact_on(&term)
-                    .unwrap();
+                    .interact_on(&term)?;
                 if confirmation {
                     // TODO: Deduplicate code
                     let label: String = Input::new()
                         .with_prompt("Enter save label")
-                        .interact_text_on(&term)
-                        .unwrap();
+                        .interact_text_on(&term)?;
                     save_swapper.import(game, &label)?;
                 } else {
                     break;
@@ -328,17 +340,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .with_prompt("Select a save")
                 .items(&items)
                 .default(0)
-                .interact_on_opt(&term)
-                .unwrap()
+                .interact_on_opt(&term)?
             else {
                 break;
             };
             if items[selection] == "New" {
+                utils::clear_screen(&term, Some(&game.to_string()), None)?;
                 // TODO: Deduplicate code
                 let label: String = Input::new()
                     .with_prompt("Enter save label")
-                    .interact_text_on(&term)
-                    .unwrap();
+                    .interact_text_on(&term)?;
                 save_swapper.create(game, &label)?;
                 continue;
             }
@@ -356,19 +367,31 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 items.push("Load");
             }
+            items.push("Rename");
             items.push("Delete");
             let Some(selection) = Select::new()
                 .with_prompt("Select an action")
                 .items(&items)
                 .default(0)
-                .interact_on_opt(&term)
-                .unwrap()
+                .interact_on_opt(&term)?
             else {
                 continue;
             };
             match items[selection] {
                 "Load" => save_swapper.load(game, save_slot_index)?,
                 "Unload" => save_swapper.unload(game, save_slot_index)?,
+                "Rename" => {
+                    utils::clear_screen(
+                        &term,
+                        Some(&game.to_string()),
+                        Some(save_swapper.get(game)[save_slot_index].label()),
+                    )?;
+                    let new_label: String = Input::new()
+                        .with_prompt("Enter new label")
+                        .with_initial_text(save_swapper.get(game)[save_slot_index].label())
+                        .interact_text_on(&term)?;
+                    save_swapper.rename(game, save_slot_index, &new_label)?;
+                },
                 "Delete" => {
                     utils::clear_screen(
                         &term,
@@ -381,8 +404,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             style("permanently").red(),
                             save_swapper.get(game)[save_slot_index].label()
                         ))
-                        .interact_on(&term)
-                        .unwrap();
+                        .interact_on(&term)?;
                     if confirmation {
                         save_swapper.delete(game, save_slot_index)?;
                     }
