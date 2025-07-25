@@ -1,6 +1,7 @@
 // TODO: Do some sort of integrity check before loading saves
 // TODO: Steam Cloud support (info UT favorites)
 // TODO: Docs
+// FIXME: Bug when game save files don't exist
 
 mod utils;
 
@@ -8,13 +9,18 @@ use console::{Term, style};
 use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap, error::Error, fs, path::{Path, PathBuf}, sync::LazyLock
+    collections::HashMap,
+    error::Error,
+    fs,
+    hash::Hash,
+    path::{Path, PathBuf},
+    sync::LazyLock,
 };
 use strum::VariantArray;
 use strum_macros::{Display, EnumIter, VariantArray};
 
 #[derive(
-    Hash, Eq, PartialEq, Debug, Clone, Copy, VariantArray, Display, Serialize, Deserialize, EnumIter
+    Hash, Eq, PartialEq, Debug, Clone, Copy, VariantArray, Display, Serialize, Deserialize, EnumIter,
 )]
 enum Game {
     #[strum(to_string = "My Summer Car")]
@@ -55,29 +61,28 @@ pub static STEAM_LINUX_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
 pub const DATA_FILENAME: &str = "vittusave";
 
 // TODO: Support copying between multiple paths
-// FIXME: Check if the path still exists before even trying anything
-static GAME_PATHS: LazyLock<HashMap<Game, Option<PathBuf>>> = LazyLock::new(|| {
+static DEFAULT_GAME_PATHS: LazyLock<HashMap<Game, PathBuf>> = LazyLock::new(|| {
     HashMap::from([
         #[cfg(target_os = "linux")]
         (
             Game::MySummerCar,
-            Some([STEAM_LINUX_HOME.clone(), PathBuf::from(".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car")]
+            [STEAM_LINUX_HOME.clone(), PathBuf::from(".local/share/Steam/steamapps/compatdata/516750/pfx/drive_c/users/steamuser/AppData/LocalLow/Amistech/My Summer Car")]
             .iter()
-            .collect()),
+            .collect(),
         ),
         #[cfg(target_os = "windows")]
         (
             Game::MySummerCar,
-            Some([HOME_DIR.to_path_buf(), PathBuf::from("AppData\\LocalLow\\Amistech\\My Summer Car")]
+            [HOME_DIR.to_path_buf(), PathBuf::from("AppData\\LocalLow\\Amistech\\My Summer Car")]
             .iter()
-            .collect()),
+            .collect(),
         ),
         #[cfg(target_os = "linux")]
         (
             Game::Undertale,
-            Some([STEAM_LINUX_HOME.clone(), PathBuf::from(".config/UNDERTALE")]
+            [STEAM_LINUX_HOME.clone(), PathBuf::from(".config/UNDERTALE")]
             .iter()
-            .collect()),
+            .collect(),
         )
         // TODO: Other OS paths
     ])
@@ -99,9 +104,13 @@ impl SaveSlot {
     pub fn new(label: &str, game_name: &str) -> Self {
         SaveSlot {
             label: label.to_string(),
-            path: [SAVE_SLOT_PATH.clone(), PathBuf::from(game_name), PathBuf::from(label)]
-                .iter()
-                .collect(),
+            path: [
+                SAVE_SLOT_PATH.clone(),
+                PathBuf::from(game_name),
+                PathBuf::from(label),
+            ]
+            .iter()
+            .collect(),
         }
     }
     pub fn label(&self) -> &str {
@@ -116,23 +125,36 @@ impl SaveSlot {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GameData {
+    pub save_slots: Vec<SaveSlot>,
+    // TODO: Use pointer instead, maybe
+    pub loaded_slot: Option<usize>,
+    pub custom_game_path: Option<PathBuf>,
+}
+impl Default for GameData {
+    fn default() -> Self {
+        Self {
+            save_slots: Vec::new(),
+            loaded_slot: None,
+            custom_game_path: None,
+        }
+    }
+}
+
 // TODO: game-specific settings
+// TODO: Separate game save/slots data struct instead of multiple fields
 #[derive(Debug, Serialize, Deserialize)]
 struct SaveSwapper {
-    save_slots: HashMap<Game, Vec<SaveSlot>>,
-    loaded_slots: HashMap<Game, Option<usize>>,
+    game_data: HashMap<Game, GameData>,
 }
 impl Default for SaveSwapper {
     fn default() -> Self {
         Self {
-            save_slots: Game::VARIANTS
-            .iter()
-            .map(|game| (*game, Vec::new()))
-            .collect(),
-            loaded_slots: Game::VARIANTS
-            .iter()
-            .map(|game| (*game, None))
-            .collect(),
+            game_data: Game::VARIANTS
+                .iter()
+                .map(|game| (*game, GameData::default()))
+                .collect(),
         }
     }
 }
@@ -161,27 +183,35 @@ impl SaveSwapper {
         utils::write_data(DATA_FILENAME, self)?;
         Ok(())
     }
-    pub fn is_os_supported(&self, game: Game) -> bool {
-        GAME_PATHS.contains_key(&game)
+    pub fn find_path(&self, game: Game) -> Option<&Path> {
+        self.game_data[&game]
+            .custom_game_path
+            .as_deref()
+            .or(DEFAULT_GAME_PATHS
+                .get(&game)
+                .map(|path_buf| path_buf.as_path()))
     }
+    pub fn is_path_defined(&self, game: Game) -> bool {
+        self.find_path(game).is_some()
+    }
+    pub fn set_path(&mut self, game: Game, new_path: &Path) {
+        self.game_data
+            .get_mut(&game)
+            .unwrap()
+            .custom_game_path
+            .replace(new_path.to_path_buf());
+    }
+    // TODO: Do not expose Vec, change method name
     pub fn get(&self, game: Game) -> &Vec<SaveSlot> {
-        assert!(self.save_slots.contains_key(&game));
-
-        self.save_slots.get(&game).unwrap()
+        &self.game_data[&game].save_slots
     }
-    pub fn is_empty(&self, game: Game) -> bool {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
-
-        self.save_slots.get(&game).unwrap().is_empty()
-    }
+    // TODO: Do not expose indexes, use HashMap with keys or expose references somehow
     pub fn create(&mut self, game: Game, label: &str) -> Result<usize, Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
+        assert!(self.is_path_defined(game));
 
         let save_slot = SaveSlot::new(label, &game.to_string());
         fs::create_dir_all(save_slot.path())?;
-        let save_slots = self.save_slots.get_mut(&game).unwrap();
+        let save_slots = &mut self.game_data.get_mut(&game).unwrap().save_slots;
         save_slots.push(save_slot);
 
         let len = save_slots.len();
@@ -192,30 +222,41 @@ impl SaveSwapper {
     // TODO: Add import from folder intrsuctions
     // FIXME: Do something about empty imports, will panic right now
     pub fn import(&mut self, game: Game, label: &str) -> Result<(), Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.get(&game).unwrap().is_empty());
+        assert!(self.is_path_defined(game));
+        assert!(self.game_data[&game].save_slots.is_empty());
 
+        // TODO: Update this to not use the index
         let index_slot = self.create(game, label)?;
-        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index_slot];
 
-        // TODO: Custom game paths and error handling
-        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
+        let game_path = self.find_path(game).unwrap();
+        let save_slot_path = self.game_data[&game].save_slots[index_slot].path();
+
+        // Copies the whole game's save folder
         utils::copy_dir_all(
-                real_save_path,
-            save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()),
+            game_path,
+            save_slot_path.join(game_path.canonicalize()?.file_name().unwrap()),
         )?;
-        // TODO: Use setter instead
-        self.loaded_slots.get_mut(&game).unwrap().replace(index_slot);
+        // TODO: Use setter instead or just don't share SaveSlot
+        self.game_data
+            .get_mut(&game)
+            .unwrap()
+            .loaded_slot
+            .replace(index_slot);
 
         self.save()?;
         Ok(())
     }
-    pub fn rename(&mut self, game: Game, index: usize, new_label: &str) -> Result<(), Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
-        assert!(self.save_slots.get(&game).unwrap().len() > index);
+    pub fn rename(
+        &mut self,
+        game: Game,
+        index: usize,
+        new_label: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        assert!(self.is_path_defined(game));
+        // FIXME: Bad check
+        assert!(self.game_data[&game].save_slots.len() > index);
 
-        let save_slot  = &mut self.save_slots.get_mut(&game).unwrap()[index];
+        let save_slot = &mut self.game_data.get_mut(&game).unwrap().save_slots[index];
         fs::rename(save_slot.path(), save_slot.path().with_file_name(new_label))?;
         save_slot.set_label(new_label);
 
@@ -223,53 +264,78 @@ impl SaveSwapper {
         Ok(())
     }
     pub fn delete(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
-        assert!(self.save_slots.get(&game).unwrap().len() > index);
+        assert!(self.is_path_defined(game));
+        // FIXME: Bad check
+        assert!(self.game_data[&game].save_slots.len() > index);
 
-        let save_slot = self.save_slots.get_mut(&game).unwrap().remove(index);
+        // TODO: Change these when SaveSlot becomes private
+        let save_slot = self
+            .game_data
+            .get_mut(&game)
+            .unwrap()
+            .save_slots
+            .remove(index);
+        let save_slot_path = save_slot.path();
+        let game_path = self.find_path(game).unwrap();
         if self.is_loaded(game, index) {
-            utils::remove_dir_contents(GAME_PATHS.get(&game).unwrap().as_deref().unwrap())?;
+            utils::remove_dir_contents(game_path)?;
         }
-        fs::remove_dir_all(save_slot.path())?;
+        fs::remove_dir_all(save_slot_path)?;
 
         self.save()?;
         Ok(())
     }
     pub fn load(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
+        assert!(self.is_path_defined(game));
         assert!(!self.is_loaded(game, index));
+        // FIXME: Bad check
+        assert!(self.game_data[&game].save_slots.len() > index);
 
-        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
-        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
+        let save_slot_path = self.game_data[&game].save_slots[index].path();
+        let game_path = self.find_path(game).unwrap();
 
-        utils::remove_dir_contents(real_save_path)?;
-        utils::copy_dir_all(save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()), real_save_path)?;
-        self.loaded_slots.get_mut(&game).unwrap().replace(index);
+        utils::remove_dir_contents(game_path)?;
+        // Copies the whole game's save folder
+        utils::copy_dir_all(
+            save_slot_path.join(game_path.canonicalize()?.file_name().unwrap()),
+            game_path,
+        )?;
+        // TODO: Use setter or don't expose SaveSlot
+        // TOOD: Stop using indexes
+        self.game_data
+            .get_mut(&game)
+            .unwrap()
+            .loaded_slot
+            .replace(index);
 
         self.save()?;
         Ok(())
     }
     pub fn unload(&mut self, game: Game, index: usize) -> Result<(), Box<dyn Error>> {
-        assert!(self.is_os_supported(game));
-        assert!(self.save_slots.contains_key(&game));
+        assert!(self.is_path_defined(game));
         assert!(self.is_loaded(game, index));
+        // FIXME: Bad check
+        assert!(self.game_data[&game].save_slots.len() > index);
 
-        let save_slot = &mut self.save_slots.get_mut(&game).unwrap()[index];
-        let real_save_path = GAME_PATHS.get(&game).unwrap().as_deref().unwrap();
+        let save_slot_path = self.game_data[&game].save_slots[index].path();
+        let game_path = self.find_path(game).unwrap();
 
-        utils::copy_dir_all(real_save_path, save_slot.path().join(real_save_path.canonicalize()?.file_name().unwrap()))?;
-        utils::remove_dir_contents(real_save_path)?;
-        self.loaded_slots.get_mut(&game).unwrap().take();
+        utils::copy_dir_all(
+            game_path,
+            save_slot_path.join(game_path.canonicalize()?.file_name().unwrap()),
+        )?;
+        utils::remove_dir_contents(game_path)?;
+        self.game_data.get_mut(&game).unwrap().loaded_slot.take();
 
         self.save()?;
         Ok(())
     }
-    pub fn is_loaded(&self, game: Game, index: usize) -> bool{
-        assert!(self.save_slots.contains_key(&game));
+    pub fn is_loaded(&self, game: Game, index: usize) -> bool {
+        assert!(self.is_path_defined(game));
 
-        self.loaded_slots.get(&game).unwrap().is_some_and(|i| i == index)
+        self.game_data[&game]
+            .loaded_slot
+            .is_some_and(|i| i == index)
     }
 }
 
@@ -283,7 +349,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let items: Vec<String> = Game::VARIANTS
             .iter()
             .map(|game| {
-                if save_swapper.is_os_supported(*game) {
+                if save_swapper.is_path_defined(*game) {
                     game.to_string()
                 } else {
                     style(game).red().to_string()
@@ -313,13 +379,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Go to setting page...
         }
         let game = Game::VARIANTS[selection];
-        if !save_swapper.is_os_supported(game) {
+        if !save_swapper.is_path_defined(game) {
             continue;
         }
 
         loop {
             utils::clear_screen(&term, Some(&game.to_string()), None)?;
-            if save_swapper.is_empty(game) {
+            if save_swapper.get(game).is_empty() {
                 let confirmation = Confirm::new()
                     .with_prompt("No saves found. Register the current one?")
                     .interact_on(&term)?;
@@ -339,7 +405,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .iter()
                 .enumerate()
                 .map(|e| {
-                    let loaded_str = if save_swapper.is_loaded(game, e.0) { "X" } else { " " };
+                    let loaded_str = if save_swapper.is_loaded(game, e.0) {
+                        "X"
+                    } else {
+                        " "
+                    };
                     String::from("[") + loaded_str + "] " + e.1.label()
                 })
                 .chain([String::from("New")])
@@ -400,7 +470,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         .with_initial_text(save_swapper.get(game)[save_slot_index].label())
                         .interact_text_on(&term)?;
                     save_swapper.rename(game, save_slot_index, &new_label)?;
-                },
+                }
                 "Delete" => {
                     utils::clear_screen(
                         &term,
