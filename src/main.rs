@@ -2,7 +2,6 @@
 // TODO: Steam Cloud support (info UT favorites)
 // TODO: Docs
 
-mod config;
 mod utils;
 
 use console::{Term, style};
@@ -27,9 +26,9 @@ enum Game {
 // TOOD: Proper error handling
 pub static HOME_DIR: LazyLock<PathBuf> =
     LazyLock::new(|| dirs::home_dir().expect("no home directory found"));
-static CONFIG_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    dirs::config_dir()
-        .expect("no config directory found")
+pub static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    dirs::data_local_dir()
+        .expect("no data directory found")
         .join("VittuSave")
 });
 pub static STEAM_PKG_PATH: LazyLock<PathBuf> =
@@ -53,8 +52,7 @@ pub static STEAM_LINUX_HOME: LazyLock<PathBuf> = LazyLock::new(|| {
         PathBuf::new()
     }
 });
-// TODO: Separate configs into separate files possibly
-pub const CONFIG_FILENAME: &str = "vittusave";
+pub const DATA_FILENAME: &str = "vittusave";
 
 // TODO: Support copying between multiple paths
 // FIXME: Check if the path still exists before even trying anything
@@ -149,18 +147,18 @@ impl Drop for SaveSwapper {
 // TODO: Reorder functionallity
 impl SaveSwapper {
     pub fn build() -> Result<Self, Box<dyn Error>> {
-        let config = config::read_config(CONFIG_FILENAME)?;
+        let save_swapper_data = utils::read_data(DATA_FILENAME)?;
 
-        if let Some(config) = config {
-            Ok(config)
+        if let Some(save_swapper) = save_swapper_data {
+            Ok(save_swapper)
         } else {
-            let config = config.unwrap_or_default();
-            config.save()?;
-            Ok(config)
+            let save_swapper = save_swapper_data.unwrap_or_default();
+            save_swapper.save()?;
+            Ok(save_swapper)
         }
     }
     fn save(&self) -> Result<(), Box<dyn Error>> {
-        config::write_config(CONFIG_FILENAME, self)?;
+        utils::write_data(DATA_FILENAME, self)?;
         Ok(())
     }
     pub fn is_os_supported(&self, game: Game) -> bool {
