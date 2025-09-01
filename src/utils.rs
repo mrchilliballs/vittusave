@@ -7,7 +7,7 @@ use std::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::DATA_DIR;
+use super::consts::DATA_DIR;
 
 pub fn clear_screen(term: &Term, game: Option<&str>, save: Option<&str>) -> io::Result<()> {
     term.clear_screen()?;
