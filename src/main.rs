@@ -15,10 +15,7 @@ mod pcgw;
 mod utils;
 
 use anyhow::Result;
-use console::{Term, style};
-use dialoguer::{Confirm, Input, Select};
-use itertools::Itertools;
-use mediawiki::{ApiSync, api};
+use mediawiki::ApiSync;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -28,7 +25,8 @@ use std::{
 use steamlocate::SteamDir;
 
 use crate::{
-    consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH}, pcgw::PCGWError,
+    consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH},
+    pcgw::PCGWError,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,7 +67,7 @@ impl SaveSlot {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-pub struct GameData {
+pub struct Game {
     pub save_slots: Vec<SaveSlot>,
     // TODO: use pointer instead, maybe
     pub loaded_slot: Option<usize>,
@@ -80,7 +78,7 @@ pub struct GameData {
 // TODO: separate game save/slots data struct instead of multiple fields
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct SaveSwapper {
-    game_data: HashMap<GameId, GameData>,
+    game_data: HashMap<GameId, Game>,
 }
 
 impl Drop for SaveSwapper {
@@ -116,7 +114,11 @@ impl SaveSwapper {
     pub fn set_path(&mut self, game: GameId, new_path: &Path) {
         self.game_data.get_mut(&game).unwrap().game_path = new_path.to_path_buf();
     }
-    // TODO: do not expose Vec, change method name
+    #[inline]
+    pub fn contains(&self, game: GameId) -> bool {
+        self.game_data.contains_key(&game)
+    }
+    // TODO: do not expose Vec
     #[inline]
     pub fn get(&self, game: GameId) -> &Vec<SaveSlot> {
         &self.game_data[&game].save_slots
@@ -248,164 +250,37 @@ impl SaveSwapper {
 fn main() -> Result<()> {
     env_logger::init();
 
-    let term = Term::stdout();
     let steam_dir = SteamDir::locate()?;
     // TODO: remove unwrap, deal with multiple libraries
-    let steam_library = steam_dir.libraries()?.nth(0).unwrap()?;
+    let steam_library = steam_dir.libraries()?.next().unwrap()?;
     println!("Steam installation - {}", steam_dir.path().display());
     let api = ApiSync::new(PCGW_API)?;
 
-    let mut save_swapper: SaveSwapper = SaveSwapper::build()?;
-
-    loop {
-        utils::clear_screen(&term, None, None)?;
-        let mut items: Vec<_> = steam_library
-            .apps()
-            .filter_map(|game| {
-                // TODO: remove unwrap
-                match pcgw::utils::fetch_page_by_id(&api, GameId::Steam(game.unwrap().app_id)) {
-                    Ok(page) => Some(Ok(page)),
-                    Err(PCGWError::NotFound) => None, // just skip it
-                    Err(err) => return Some(Err(err)),    // propagate other errors
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        items.push("Settings".to_string());
-        println!("Selecting");
-        let Some(selection) = Select::new()
-            .with_prompt("Menu")
-            .items(&items)
-            .default(0)
-            .interact_on_opt(&term)?
-        else {
-            break;
-        };
-        if items[selection] == "Settings" {
-            utils::clear_screen(&term, None, None)?;
-            let items = ["Dummy 1", "Dummy 2"];
-            let Some(_selection) = Select::new()
-                .with_prompt("Settings")
-                .items(&items)
-                .default(0)
-                .interact_on_opt(&term)?
-            else {
-                continue;
+    let save_swapper: SaveSwapper = SaveSwapper::build()?;
+    let games: Vec<_> = steam_library
+        .apps()
+        .filter_map(|game| {
+            // TODO: remove unwrap
+            let steam_id = match game {
+                Ok(game) => game.app_id,
+                Err(err) => return Some(Err(err.into())),
             };
-            // Go to setting page...
-        }
-        //     let game = Game::VARIANTS[selection];
-        //     if !save_swapper.is_path_defined(game) {
-        //         continue;
-        //     }
+            match pcgw::utils::fetch_page_by_id(&api, GameId::Steam(steam_id)) {
+                Ok(page) => {
+                    if save_swapper.contains(GameId::Steam(steam_id)) {
+                        // TODO: Set to green color
+                        Some(Ok(page.to_string()))
+                    } else {
+                        // TODO: Set to red color
+                        Some(Ok(format!("{page} (unloaded)")))
+                    }
+                }
+                Err(PCGWError::NotFound) => None,
+                Err(err) => Some(Err(err.into())),
+            }
+        })
+        .chain([Ok(String::from("Settings"))])
+        .collect::<Result<_>>()?;
 
-        //     loop {
-        //         utils::clear_screen(&term, Some(&game.to_string()), None)?;
-        //         if save_swapper.get(game).is_empty() {
-        //             let confirmation = Confirm::new()
-        //                 .with_prompt("No saves found. Register the current one?")
-        //                 .interact_on(&term)?;
-        //             if confirmation {
-        //                 // TODO: deduplicate code
-        //                 let label: String = Input::new()
-        //                     .with_prompt("Enter save label")
-        //                     .interact_text_on(&term)?;
-        //                 save_swapper.import(game, &label)?;
-        //             } else {
-        //                 break;
-        //             }
-        //             continue;
-        //         }
-        //         let items: Vec<String> = save_swapper
-        //             .get(game)
-        //             .iter()
-        //             .enumerate()
-        //             .map(|e| {
-        //                 let loaded_str = if save_swapper.is_loaded(game, e.0) {
-        //                     "X"
-        //                 } else {
-        //                     " "
-        //                 };
-        //                 String::from("[") + loaded_str + "] " + e.1.label()
-        //             })
-        //             .chain([String::from("New")])
-        //             .collect();
-
-        //         let Some(selection) = Select::new()
-        //             .with_prompt("Select a save")
-        //             .items(&items)
-        //             .default(0)
-        //             .interact_on_opt(&term)?
-        //         else {
-        //             break;
-        //         };
-        //         if items[selection] == "New" {
-        //             utils::clear_screen(&term, Some(&game.to_string()), None)?;
-        //             // TODO: deduplicate code
-        //             let label: String = Input::new()
-        //                 .with_prompt("Enter save label")
-        //                 .interact_text_on(&term)?;
-        //             save_swapper.create(game, &label)?;
-        //             continue;
-        //         }
-        //         let save_slot_index = selection;
-
-        //         utils::clear_screen(
-        //             &term,
-        //             Some(&game.to_string()),
-        //             Some(save_swapper.get(game)[save_slot_index].label()),
-        //         )?;
-        //         let mut items: Vec<&'static str> = vec![];
-        //         let save_slot_loaded = save_swapper.is_loaded(game, save_slot_index);
-        //         if save_slot_loaded {
-        //             items.push("Unload");
-        //         } else {
-        //             items.push("Load");
-        //         }
-        //         items.push("Rename");
-        //         items.push("Delete");
-        //         let Some(selection) = Select::new()
-        //             .with_prompt("Select an action")
-        //             .items(&items)
-        //             .default(0)
-        //             .interact_on_opt(&term)?
-        //         else {
-        //             continue;
-        //         };
-        //         match items[selection] {
-        //             "Load" => save_swapper.load(game, save_slot_index)?,
-        //             "Unload" => save_swapper.unload(game, save_slot_index)?,
-        //             "Rename" => {
-        //                 utils::clear_screen(
-        //                     &term,
-        //                     Some(&game.to_string()),
-        //                     Some(save_swapper.get(game)[save_slot_index].label()),
-        //                 )?;
-        //                 let new_label: String = Input::new()
-        //                     .with_prompt("Enter new label")
-        //                     .with_initial_text(save_swapper.get(game)[save_slot_index].label())
-        //                     .interact_text_on(&term)?;
-        //                 save_swapper.rename(game, save_slot_index, &new_label)?;
-        //             }
-        //             "Delete" => {
-        //                 utils::clear_screen(
-        //                     &term,
-        //                     Some(&game.to_string()),
-        //                     Some(save_swapper.get(game)[save_slot_index].label()),
-        //                 )?;
-        //                 let confirmation = Confirm::new()
-        //                     .with_prompt(format!(
-        //                         "Are you sure you want to {} delete \"{}\"?",
-        //                         style("permanently").red(),
-        //                         save_swapper.get(game)[save_slot_index].label()
-        //                     ))
-        //                     .interact_on(&term)?;
-        //                 if confirmation {
-        //                     save_swapper.delete(game, save_slot_index)?;
-        //                 }
-        //             }
-        //             _ => unreachable!(),
-        //         }
-        //     }
-    }
     Ok(())
 }

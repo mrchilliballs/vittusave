@@ -1,5 +1,4 @@
 use anyhow::Result;
-use console::Term;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fs, io,
@@ -9,24 +8,6 @@ use std::{
 use crate::{
     consts::DATA_DIR,
 };
-
-pub fn clear_screen(term: &Term, game: Option<&str>, save: Option<&str>) -> io::Result<()> {
-    term.clear_screen()?;
-    print!("GAME: ");
-    if let Some(game) = game {
-        println!("{game}");
-    } else {
-        println!("NONE");
-    }
-    print!("SAVE: ");
-    if let Some(save) = save {
-        println!("{save}");
-    } else {
-        println!("NONE");
-    }
-    println!();
-    Ok(())
-}
 
 fn make_data_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = DATA_DIR.clone();

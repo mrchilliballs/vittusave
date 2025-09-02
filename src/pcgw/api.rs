@@ -85,7 +85,6 @@ pub enum LocationKind {
     Steam,
 }
 
-// TODO: PCGW Data or something for name
 #[derive(Debug, Default)]
 pub struct PCGWSaveMeta {
     locations: HashMap<LocationKind, Vec<Location>>,

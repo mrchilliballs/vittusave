@@ -12,7 +12,6 @@ pub const DATA_FILENAME: &str = "vittusave";
 
 pub const PCGW_API: &str = "https://www.pcgamingwiki.com/w/api.php";
 
-// TODO: Support copying between multiple paths
 pub static SAVE_SLOT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     dirs::document_dir()
         .expect("no document directory found")
