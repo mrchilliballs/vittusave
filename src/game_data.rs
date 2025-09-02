@@ -11,13 +11,16 @@ use std::{
     sync::LazyLock,
 };
 
-use mediawiki::{Api, MediaWikiError, api_sync::ApiSync};
+use mediawiki::{MediaWikiError, api_sync::ApiSync};
 use scraper::{ElementRef, Html, Node, Selector};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn/*, trace*/};
 
 use itertools::Itertools;
+
+use crate::utils;
 
 // TODO: rename this error type
 #[derive(Debug, Error)]
@@ -133,14 +136,21 @@ pub enum LocationKind {
 //     GameDataError(#[from] GameDataError),
 // }
 
+// TODO: PCGW Data or something for name
 #[derive(Debug, Default)]
 pub struct GameData {
     locations: HashMap<LocationKind, Vec<Location>>,
     extra_notes: Vec<String>,
 }
 
+#[non_exhaustive]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+pub enum GameId {
+    Steam(u32),
+}
+
 #[derive(Debug)]
-enum IdTy {
+enum HtmlIdTy {
     CiteRef,
     CiteNote,
 }
@@ -154,10 +164,10 @@ pub struct ExpansionParams<'a> {
 // TODO: Can user ID, steam path, etc. be turned optional somewhow?
 impl GameData {
     /// This is function is nescessary because the numbers that prefix IDs are different when requesting for only a specific section. I don't know why.
-    fn format_id(id: &str, ty: IdTy) -> Option<&str> {
+    fn format_id(id: &str, ty: HtmlIdTy) -> Option<&str> {
         let (start, separator) = match ty {
-            IdTy::CiteRef => ("cite_ref-", '_'),
-            IdTy::CiteNote => ("cite_note-", '-'),
+            HtmlIdTy::CiteRef => ("cite_ref-", '_'),
+            HtmlIdTy::CiteNote => ("cite_note-", '-'),
         };
         let begin = id.find(start)? + start.len();
         let end = id.rfind(separator)?;
@@ -253,27 +263,6 @@ impl GameData {
         Some(PathBuf::from(buf))
     }
 
-    fn fetch_page_by_id(api: &ApiSync, steam_id: u32) -> Result<String, GameDataError> {
-        // Query parameters
-        let params = api.params_into(&[
-            ("action", "cargoquery"),
-            ("tables", "Infobox_game"),
-            ("fields", "Infobox_game._pageName=Page"),
-            ("where", &format!("Steam_AppID HOLDS {steam_id}")),
-        ]);
-
-        // Run query; this will automatically continue if more results are available, and merge all results into one
-        let res = api.get_query_api_json_all(&params)?;
-
-        res["cargoquery"]
-            .as_array()
-            .ok_or(GameDataError::ParseError)?
-            .first()
-            .ok_or(GameDataError::NotFound)?["title"]["Page"]
-            .as_str()
-            .map(str::to_string)
-            .ok_or(GameDataError::ParseError)
-    }
     fn fetch_section_id(
         api: &ApiSync,
         page: &str,
@@ -350,7 +339,7 @@ impl GameData {
                     Node::Element(child_el) if child_el.name() == "sup" => {
                         let note_id = child_el
                             .attr("id")
-                            .and_then(|id| GameData::format_id(id, IdTy::CiteRef))
+                            .and_then(|id| GameData::format_id(id, HtmlIdTy::CiteRef))
                             .map(|id| id.to_string());
                         debug!("note #id: `{note_id:?}`");
                         note = note_id
@@ -373,10 +362,10 @@ impl GameData {
 
     fn get_location_data(
         api: &ApiSync,
-        steam_id: u32,
+        steam_id: GameId,
     ) -> Result<HashMap<LocationKind, Vec<Location>>, GameDataError> {
-        // TODO: Different errors for different steps
-        let page = GameData::fetch_page_by_id(api, steam_id)?;
+        // TODO: different errors for different steps
+        let page = utils::fetch_page_by_id(api, steam_id)?;
         let section_html = GameData::section_html(api, &page, "Game data")?;
         let page_html = GameData::page_html(api, &page)?;
 
@@ -407,8 +396,8 @@ impl GameData {
                 break;
             }
         }
-        // FIXME: Extra notes are not avaliable in section thing
-        // TODO: Thumbs down/Thumbs up display, convert HTML with library
+        // FIXME: extra notes are not avaliable in section thing
+        // TODO: thumbs down/Thumbs up display, convert HTML with library
         // let extra_notes = parser_output_iter
         //     .map_while(|el| {
         //         (el.value().name() == "dl").then_some(
@@ -492,7 +481,7 @@ impl GameData {
                     Ok((
                         GameData::format_id(
                             el.value().id().ok_or(GameDataError::ParseError)?,
-                            IdTy::CiteNote,
+                            HtmlIdTy::CiteNote,
                         )
                         .ok_or(GameDataError::ParseError)?,
                         html2text::from_read(
@@ -527,9 +516,9 @@ impl GameData {
         Ok(notes)
     }
 
-    pub fn build(api: &ApiSync, steam_id: u32) -> Result<Self, GameDataError> {
+    pub fn build(api: &ApiSync, id: GameId) -> Result<Self, GameDataError> {
         Ok(GameData {
-            locations: GameData::get_location_data(api, steam_id)?,
+            locations: GameData::get_location_data(api, id)?,
             extra_notes: Vec::new(),
         })
     }
@@ -542,7 +531,7 @@ impl GameData {
     // TODO: process_location_data in here
 }
 
-// TODO: Return moved data back in error
+// TODO: return moved data back in error
 // fn process_location_data(
 //     api: &ApiSync,
 //     page: &str,
@@ -556,7 +545,7 @@ impl GameData {
 //     Ok(GameData::new(locations, Vec::new()))
 // }
 
-// TODO: Options into struct not multiple fields
+// TODO: options into struct not multiple fields
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -599,11 +588,11 @@ fn main() -> anyhow::Result<()> {
             //     Err(GameDataError::NotFound) => continue,
             //     Err(err) => return Err(err.into()),
             // };
-            // // TODO: Resolve paths
+            // // TODO: resolve paths
             // let windows_locations =
             //     locations.get_locations(LocationKind::OS(String::from("Windows")));
             // println!("{:?}", windows_locations);
-            let mut game_data = match GameData::build(&api, app.app_id) {
+            let mut game_data = match GameData::build(&api, GameId::Steam(app.app_id)) {
                 Ok(data) => data,
                 Err(GameDataError::NotFound) => continue,
                 Err(err) => return Err(err.into()),
@@ -647,35 +636,35 @@ mod tests {
         let correct4 = "";
 
         assert_eq!(
-            GameData::format_id(sample_ref_1, IdTy::CiteRef),
+            GameData::format_id(sample_ref_1, HtmlIdTy::CiteRef),
             Some(correct1)
         );
         assert_eq!(
-            GameData::format_id(sample_ref_2, IdTy::CiteRef),
+            GameData::format_id(sample_ref_2, HtmlIdTy::CiteRef),
             Some(correct2)
         );
         assert_eq!(
-            GameData::format_id(sample_ref_3, IdTy::CiteRef),
+            GameData::format_id(sample_ref_3, HtmlIdTy::CiteRef),
             Some(correct3)
         );
         assert_eq!(
-            GameData::format_id(sample_ref_4, IdTy::CiteRef),
+            GameData::format_id(sample_ref_4, HtmlIdTy::CiteRef),
             Some(correct4)
         );
         assert_eq!(
-            GameData::format_id(sample_note_1, IdTy::CiteNote),
+            GameData::format_id(sample_note_1, HtmlIdTy::CiteNote),
             Some(correct1)
         );
         assert_eq!(
-            GameData::format_id(sample_note_2, IdTy::CiteNote),
+            GameData::format_id(sample_note_2, HtmlIdTy::CiteNote),
             Some(correct2)
         );
         assert_eq!(
-            GameData::format_id(sample_note_3, IdTy::CiteNote),
+            GameData::format_id(sample_note_3, HtmlIdTy::CiteNote),
             Some(correct3)
         );
         assert_eq!(
-            GameData::format_id(sample_note_4, IdTy::CiteNote),
+            GameData::format_id(sample_note_4, HtmlIdTy::CiteNote),
             Some(correct4)
         );
     }
