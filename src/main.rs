@@ -11,7 +11,7 @@
 // TODO: replace legacy system
 
 mod consts;
-mod game_data;
+mod pcgw;
 mod utils;
 
 use anyhow::Result;
@@ -22,23 +22,25 @@ use mediawiki::{ApiSync, api};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    error::Error,
     fs,
     path::{Path, PathBuf},
 };
 use steamlocate::SteamDir;
 
-use game_data::GameId;
-
 use crate::{
-    consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH},
-    game_data::GameDataError,
+    consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH}, pcgw::PCGWError,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveSlot {
     label: String,
     path: PathBuf,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
+pub enum GameId {
+    Steam(u32),
 }
 
 impl SaveSlot {
@@ -101,17 +103,21 @@ impl SaveSwapper {
             Ok(save_swapper)
         }
     }
+    #[inline]
     fn save(&self) -> Result<()> {
         utils::write_data(DATA_FILENAME, self)?;
         Ok(())
     }
+    #[inline]
     pub fn path(&self, game: GameId) -> &Path {
         &self.game_data[&game].game_path
     }
+    #[inline]
     pub fn set_path(&mut self, game: GameId, new_path: &Path) {
         self.game_data.get_mut(&game).unwrap().game_path = new_path.to_path_buf();
     }
     // TODO: do not expose Vec, change method name
+    #[inline]
     pub fn get(&self, game: GameId) -> &Vec<SaveSlot> {
         &self.game_data[&game].save_slots
     }
@@ -119,7 +125,7 @@ impl SaveSwapper {
     pub fn create(&mut self, game: GameId, label: String) -> Result<usize> {
         let api = ApiSync::new(PCGW_API)?;
 
-        let save_slot = SaveSlot::new(label, utils::fetch_page_by_id(&api, game)?);
+        let save_slot = SaveSlot::new(label, pcgw::utils::fetch_page_by_id(&api, game)?);
         fs::create_dir_all(save_slot.path())?;
         let save_slots = &mut self.game_data.get_mut(&game).unwrap().save_slots;
         save_slots.push(save_slot);
@@ -230,6 +236,7 @@ impl SaveSwapper {
         self.save()?;
         Ok(())
     }
+    #[inline]
     pub fn is_loaded(&self, game: GameId, index: usize) -> bool {
         self.game_data[&game]
             .loaded_slot
@@ -256,9 +263,9 @@ fn main() -> Result<()> {
             .apps()
             .filter_map(|game| {
                 // TODO: remove unwrap
-                match utils::fetch_page_by_id(&api, GameId::Steam(game.unwrap().app_id)) {
+                match pcgw::utils::fetch_page_by_id(&api, GameId::Steam(game.unwrap().app_id)) {
                     Ok(page) => Some(Ok(page)),
-                    Err(GameDataError::NotFound) => None, // just skip it
+                    Err(PCGWError::NotFound) => None, // just skip it
                     Err(err) => return Some(Err(err)),    // propagate other errors
                 }
             })
