@@ -10,6 +10,7 @@
 
 // TODO: replace legacy system
 
+mod app;
 mod consts;
 mod pcgw;
 mod utils;
@@ -25,6 +26,7 @@ use std::{
 use steamlocate::SteamDir;
 
 use crate::{
+    app::App,
     consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH},
     pcgw::PCGWError,
 };
@@ -279,8 +281,11 @@ fn main() -> Result<()> {
                 Err(err) => Some(Err(err.into())),
             }
         })
-        .chain([Ok(String::from("Settings"))])
+        .chain([Ok(String::from("Add")), Ok(String::from("Settings"))])
         .collect::<Result<_>>()?;
 
-    Ok(())
+    let terminal = ratatui::init();
+    let result = App::new().run(terminal);
+    ratatui::restore();
+    result
 }

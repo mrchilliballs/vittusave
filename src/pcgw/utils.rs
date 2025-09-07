@@ -13,7 +13,13 @@ use log::{debug, info, warn /*, trace*/};
 
 use itertools::Itertools;
 
-use crate::{GameId, pcgw::{PCGWError, api::{Location, LocationKind}}};
+use crate::{
+    GameId,
+    pcgw::{
+        PCGWError,
+        api::{Location, LocationKind},
+    },
+};
 
 /// Looks up a Steam ID in the PCGW and returns the name of the page, if it exists
 pub fn fetch_page_by_id(api: &ApiSync, steam_id: GameId) -> Result<String, PCGWError> {
@@ -71,7 +77,6 @@ fn format_id(id: &str, ty: HtmlIdTy) -> Option<&str> {
     Some(&id[begin..end])
 }
 
-
 // Environment variable placeholders
 static ENV_VARS: LazyLock<HashMap<&str, &[&str]>> = LazyLock::new(|| {
     HashMap::from([
@@ -118,7 +123,11 @@ pub(super) struct ExpansionParams<'a> {
 /// Returns None if an undefined abbreviation in the path
 /// Supports non-unicode encoded env variable values
 /// Finds first match only
-pub(super) fn replace_path_abbrs(path: &str, os: Option<&str>, params: ExpansionParams) -> Option<PathBuf> {
+pub(super) fn replace_path_abbrs(
+    path: &str,
+    os: Option<&str>,
+    params: ExpansionParams,
+) -> Option<PathBuf> {
     let os = os.unwrap_or(std::env::consts::OS);
 
     let mut replacement_locations: HashMap<usize, &str> = HashMap::new();
@@ -191,8 +200,7 @@ pub(super) fn replace_path_abbrs(path: &str, os: Option<&str>, params: Expansion
 fn fetch_section_id(api: &ApiSync, page: &str, section_line: &str) -> Result<String, PCGWError> {
     let params = api.params_into(&[("action", "parse"), ("page", page), ("prop", "sections")]);
 
-    // FIXME: remove .unwrap()
-    let res = api.get_query_api_json_all(&params).unwrap();
+    let res = api.get_query_api_json_all(&params)?;
 
     res["parse"]["sections"]
         .as_array()
@@ -281,17 +289,10 @@ fn extract_raw_location(el: ElementRef, notes: &HashMap<&str, String>) -> Locati
     Location::new(path_str, note)
 }
 
-pub(super) fn get_location_data(
-    api: &ApiSync,
-    steam_id: GameId,
+fn parse_data_table(
+    section_html: &Html,
+    notes: HashMap<&str, String>,
 ) -> Result<HashMap<LocationKind, Vec<Location>>, PCGWError> {
-    // TODO: different errors for different steps
-    let page = fetch_page_by_id(api, steam_id)?;
-    let section_html = section_html(api, &page, "Game data")?;
-    let page_html = page_html(api, &page)?;
-
-    let notes = extract_notes(&page_html)?;
-
     let parser_output_selector =
         Selector::parse(".mw-parser-output").expect("str should be a valid selector");
     let header_selector = Selector::parse(".mw-headline").expect("str should be a valid selector");
@@ -369,7 +370,21 @@ pub(super) fn get_location_data(
             Some((location_kind, locations))
         })
         .collect();
+
     Ok(locations)
+}
+
+pub(super) fn get_location_data(
+    api: &ApiSync,
+    steam_id: GameId,
+) -> Result<HashMap<LocationKind, Vec<Location>>, PCGWError> {
+    // TODO: different errors for different steps
+    let page = fetch_page_by_id(api, steam_id)?;
+    let section_html = section_html(api, &page, "Game data")?;
+    let page_html = page_html(api, &page)?;
+    let notes = extract_notes(&page_html)?;
+
+    parse_data_table(&section_html, notes)
 }
 
 fn extract_notes(page_html: &Html) -> Result<HashMap<&str, String>, PCGWError> {
@@ -439,38 +454,14 @@ mod tests {
         let correct3 = "Steam";
         let correct4 = "";
 
-        assert_eq!(
-            format_id(sample_ref_1, HtmlIdTy::CiteRef),
-            Some(correct1)
-        );
-        assert_eq!(
-            format_id(sample_ref_2, HtmlIdTy::CiteRef),
-            Some(correct2)
-        );
-        assert_eq!(
-            format_id(sample_ref_3, HtmlIdTy::CiteRef),
-            Some(correct3)
-        );
-        assert_eq!(
-            format_id(sample_ref_4, HtmlIdTy::CiteRef),
-            Some(correct4)
-        );
-        assert_eq!(
-            format_id(sample_note_1, HtmlIdTy::CiteNote),
-            Some(correct1)
-        );
-        assert_eq!(
-            format_id(sample_note_2, HtmlIdTy::CiteNote),
-            Some(correct2)
-        );
-        assert_eq!(
-            format_id(sample_note_3, HtmlIdTy::CiteNote),
-            Some(correct3)
-        );
-        assert_eq!(
-            format_id(sample_note_4, HtmlIdTy::CiteNote),
-            Some(correct4)
-        );
+        assert_eq!(format_id(sample_ref_1, HtmlIdTy::CiteRef), Some(correct1));
+        assert_eq!(format_id(sample_ref_2, HtmlIdTy::CiteRef), Some(correct2));
+        assert_eq!(format_id(sample_ref_3, HtmlIdTy::CiteRef), Some(correct3));
+        assert_eq!(format_id(sample_ref_4, HtmlIdTy::CiteRef), Some(correct4));
+        assert_eq!(format_id(sample_note_1, HtmlIdTy::CiteNote), Some(correct1));
+        assert_eq!(format_id(sample_note_2, HtmlIdTy::CiteNote), Some(correct2));
+        assert_eq!(format_id(sample_note_3, HtmlIdTy::CiteNote), Some(correct3));
+        assert_eq!(format_id(sample_note_4, HtmlIdTy::CiteNote), Some(correct4));
     }
 
     const LOCALAPPDATA: &str = "C:\\Users\\matheus\\AppData\\Local";

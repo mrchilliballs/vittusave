@@ -1,5 +1,3 @@
-// TODO: remember to use #[inline] functions when refactoring this
-
 use std::{
     collections::HashMap,
     fs,
@@ -54,6 +52,10 @@ impl Location {
     pub fn path_str(&self) -> &str {
         &self.path_str
     }
+    #[inline]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
     pub fn expand_path(&mut self, install_dir: &Path, user_id: u64) -> Result<(), LocationError> {
         self.path.replace(
             pcgw::utils::replace_path_abbrs(
@@ -73,10 +75,6 @@ impl Location {
         );
         Ok(())
     }
-    #[inline]
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -93,6 +91,7 @@ pub struct PCGWSaveMeta {
 
 // TODO: Can user ID, steam path, etc. be turned optional somewhow?
 impl PCGWSaveMeta {
+    // TODO: return Self back in error
     pub fn build(api: &ApiSync, id: GameId) -> Result<Self, PCGWError> {
         Ok(PCGWSaveMeta {
             locations: pcgw::utils::get_location_data(api, id)?,
@@ -105,7 +104,4 @@ impl PCGWSaveMeta {
             .map(|vec| vec.as_mut_slice())
             .unwrap_or(&mut [])
     }
-    // TODO: process_location_data in here
 }
-
-// TODO: return moved data back in error

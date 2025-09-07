@@ -5,14 +5,16 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.99"
+crossterm = "0.29.0"
 dirs = "6.0.0"
 env_logger = "0.11.8"
 html2text = "0.15.3"
 itertools = "0.14.0"
 log = "0.4.27"
 mediawiki = "0.3.1"
+ratatui = "0.29.0"
 scraper = "0.24.0"
-serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde = { version = "1.0.219", features = ["derive"] }
 steamlocate = "2.0.1"
 thiserror = "2.0.16"
 toml = "0.9.2"
