@@ -24,6 +24,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use steamlocate::SteamDir;
+use strum::Display;
 
 use crate::{
     app::App,
@@ -37,10 +38,20 @@ pub struct SaveSlot {
     path: PathBuf,
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Display)]
 #[non_exhaustive]
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy)]
 pub enum GameId {
+    #[strum(to_string = "{0}")]
     Steam(u32),
+}
+impl GameId {
+    pub fn get_name(&self) -> Result<String> {
+        // TODO: cache this in $XDG_CACHE_HOME, etc.
+        Ok(pcgw::utils::fetch_page_by_id(
+            &ApiSync::new(PCGW_API)?,
+            *self,
+        )?)
+    }
 }
 
 impl SaveSlot {
@@ -78,18 +89,9 @@ pub struct Game {
 
 // TODO: game-specific settings
 // TODO: separate game save/slots data struct instead of multiple fields
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Serialize, Deserialize)]
 struct SaveSwapper {
     game_data: HashMap<GameId, Game>,
-}
-
-impl Default for SaveSwapper {
-    fn default() -> Self {
-        let swapper = SaveSwapper {
-            game_data: HashMap::default(),
-        };
-        swapper
-    }
 }
 
 impl Drop for SaveSwapper {
@@ -122,11 +124,14 @@ impl SaveSwapper {
         if let Some(steam_library) = steam_library {
             let steam_library = steam_library?;
             for &app_id in steam_library.app_ids() {
+                // Makes sure that app is a game
                 match pcgw::utils::fetch_page_by_id(&api, GameId::Steam(app_id)) {
-                    Ok(_) | Err(PCGWError::NotFound) => {
+                    Ok(_) => {
                         self.game_data
                             .insert(GameId::Steam(app_id), Game::default());
                     }
+                    // Not a game
+                    Err(PCGWError::NotFound) => {}
                     Err(err) => return Err(err.into()),
                 }
             }
@@ -280,6 +285,10 @@ impl SaveSwapper {
         self.game_data[&game]
             .loaded_slot
             .is_some_and(|i| i == index)
+    }
+    #[inline]
+    pub fn game_data(&self) -> &HashMap<GameId, Game> {
+        &self.game_data
     }
 }
 
