@@ -78,9 +78,18 @@ pub struct Game {
 
 // TODO: game-specific settings
 // TODO: separate game save/slots data struct instead of multiple fields
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 struct SaveSwapper {
     game_data: HashMap<GameId, Game>,
+}
+
+impl Default for SaveSwapper {
+    fn default() -> Self {
+        let swapper = SaveSwapper {
+            game_data: HashMap::default(),
+        };
+        swapper
+    }
 }
 
 impl Drop for SaveSwapper {
@@ -101,6 +110,32 @@ impl SaveSwapper {
             let save_swapper = save_swapper_data.unwrap_or_default();
             save_swapper.save()?;
             Ok(save_swapper)
+        }
+    }
+    // Finds the steam directory and loads games from all libraries. Returns `Ok(false)` if no
+    // games or libraries are found but Steam is installed.
+    pub fn load_steam_library(&mut self) -> Result<bool> {
+        let steam_dir = SteamDir::locate()?;
+        let api = ApiSync::new(PCGW_API)?;
+        let steam_library = steam_dir.libraries()?.next();
+
+        if let Some(steam_library) = steam_library {
+            let steam_library = steam_library?;
+            for &app_id in steam_library.app_ids() {
+                match pcgw::utils::fetch_page_by_id(&api, GameId::Steam(app_id)) {
+                    Ok(_) | Err(PCGWError::NotFound) => {
+                        self.game_data
+                            .insert(GameId::Steam(app_id), Game::default());
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+            if self.game_data.is_empty() {
+                return Ok(false);
+            }
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
     #[inline]
@@ -259,7 +294,7 @@ fn main() -> Result<()> {
     let api = ApiSync::new(PCGW_API)?;
 
     let save_swapper: SaveSwapper = SaveSwapper::build()?;
-    let games: Vec<_> = steam_library
+    let _games: Vec<_> = steam_library
         .apps()
         .filter_map(|game| {
             // TODO: remove unwrap

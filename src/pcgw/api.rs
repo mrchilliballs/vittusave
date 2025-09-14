@@ -9,7 +9,10 @@ use std::{
 use mediawiki::{MediaWikiError, api_sync::ApiSync};
 use thiserror::Error;
 
-use crate::{GameId, pcgw::{self, utils::ExpansionParams}};
+use crate::{
+    GameId,
+    pcgw::{self, utils::ExpansionParams},
+};
 
 // TODO: rename this error type
 #[derive(Debug, Error)]
@@ -31,7 +34,6 @@ pub enum LocationError {
     #[error("undefined abbreviation in path")]
     UndefinedAbbr,
 }
-
 
 /// Pre-processed location
 #[derive(Debug, Default)]

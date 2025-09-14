@@ -2,9 +2,10 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
+    layout::{Constraint, Direction, Layout},
     style::Stylize,
     text::Line,
-    widgets::{Block, Paragraph},
+    widgets::{Block, List, Paragraph},
 };
 
 /// The main application which holds the state and logic of the application.
@@ -37,19 +38,26 @@ impl App {
     /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
     /// - <https://github.com/ratatui/ratatui/tree/main/ratatui-widgets/examples>
     fn render(&mut self, frame: &mut Frame) {
-        let title = Line::from("Ratatui Simple Template")
-            .bold()
-            .blue()
-            .centered();
-        let text = "Hello, Ratatui!\n\n\
-            Created using https://github.com/ratatui/templates\n\
-            Press `Esc`, `Ctrl-C` or `q` to stop running.";
-        frame.render_widget(
-            Paragraph::new(text)
-                .block(Block::bordered().title(title))
-                .centered(),
-            frame.area(),
-        )
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            // TODO
+            .constraints(vec![Constraint::Min(20)])
+            .split(frame.area());
+
+        // let title = Line::from("Ratatui Simple Template")
+        //     .bold()
+        //     .blue()
+        //     .centered();
+        // let text = "Hello, Ratatui!\n\n\
+        //     Created using https://github.com/ratatui/templates\n\
+        //     Press `Esc`, `Ctrl-C` or `q` to stop running.";
+        // let list = List::new(self.)
+        // frame.render_widget(
+        //     Paragraph::new(text)
+        //         .block(Block::bordered().title(title))
+        //         .centered(),
+        //     layout[0],
+        // )
     }
 
     /// Reads the crossterm events and updates the state of [`App`].
@@ -70,6 +78,7 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     fn on_key_event(&mut self, key: KeyEvent) {
         match (key.modifiers, key.code) {
+            // TODO: arrows + hjkl to move menu up and down,
             (_, KeyCode::Esc | KeyCode::Char('q'))
             | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
             // Add other key handlers here.

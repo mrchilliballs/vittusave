@@ -5,9 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{
-    consts::DATA_DIR,
-};
+use crate::consts::DATA_DIR;
 
 fn make_data_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = DATA_DIR.clone();
