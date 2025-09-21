@@ -12,14 +12,14 @@ use ratatui::{
 };
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
-use crate::{GameId, SaveSwapper};
+use crate::{GameId, SaveManager};
 
 /// The main application which holds the state and logic of the application.
 #[derive(Debug, Default)]
 pub struct App {
     /// Is the application running?
     running: bool,
-    save_swapper: SaveSwapper,
+    save_swapper: SaveManager,
     selected_tab: SelectedTab,
 }
 
