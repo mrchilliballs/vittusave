@@ -32,25 +32,39 @@ use std::path::PathBuf;
 //
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, sync::LazyLock};
+    use std::{collections::HashSet, fs, path::Path, sync::LazyLock};
 
     use tempfile::TempDir;
 
     use super::*;
 
-    // fn create_swapper() -> DirSwapper {
-    //     let primary_dir = tempfile::tempdir().expect("failed to create temporary test directory");
-    //     let version_dir = tempfile::tempdir().expect("failed to create temporary test directory");
-    //
-    //     DirSwapper::new(primary_dir, versions_dir);
-    // }
+    fn create_temp_dir() -> TempDir {
+        tempfile::tempdir().expect("failed to create temporary test directory");
+    }
+
+    const DEFAULT_PRIMARY_NAME: &str = "Example1";
+    /// Creates a new swapper with the provided paths or temporary directories, and a primary name
+    /// of `DEFAULT_PRIMARY_NAME`.
+    fn create_swapper(
+        primary_dir: Option<TempDir>,
+        version_dir: Option<TempDir>,
+    ) -> (TempDir, TempDir, DirSwapper) {
+        let primary_dir = primary_dir.unwrap_or(create_temp_dir());
+        let version_dir = version_dir.unwrap_or(create_temp_dir());
+
+        (
+            primary_dir,
+            version_dir,
+            DirSwapper::new(primary_dir.path(), version_dir.path(), DEFAULT_PRIMARY_NAME),
+        )
+    }
     #[derive(Debug, Clone)]
     enum Node {
         File(PathBuf),
         Dir(PathBuf, Vec<Node>),
     }
     #[derive(Debug, Clone)]
-    /// All file paths must be relative to the root
+    /// All file paths must be relative to the root.
     struct FileTree(Vec<Node>);
 
     impl<'a> IntoIterator for &'a FileTree {
@@ -73,7 +87,7 @@ mod tests {
         stack: Vec<&'a Node>,
         at_head: bool,
     }
-    /// Pre-order itearaton of the file tree
+    /// Pre-order itearaton of the file tree.
     impl<'a> Iterator for FileTreeIter<'a> {
         type Item = &'a Node;
 
@@ -116,17 +130,31 @@ mod tests {
         }
     }
 
-    static FILE_TREE: LazyLock<FileTree> = LazyLock::new(|| {
+    static DUMMY_FILE_TREE_1: LazyLock<FileTree> = LazyLock::new(|| {
         FileTree(vec![
             Node::File("file1.txt".into()),
             Node::File("file2.txt".into()),
             Node::Dir("inner".into(), vec![Node::File("inner/file3.txt".into())]),
         ])
     });
+    static DUMMY_FILE_TREE_2: LazyLock<FileTree> = LazyLock::new(|| {
+        FileTree(vec![
+            Node::File("Cargo.toml".into()),
+            Node::File("Cargo.lock".into()),
+            Node::Dir(
+                "src".into(),
+                vec![
+                    Node::File("src/main.rs".into()),
+                    Node::File("src/app.rs".into()),
+                ],
+            ),
+        ])
+    });
 
-    fn fill_with_dummy_contents(dest: impl AsRef<Path>) {
+    /// Creates the file/directory structure of the specific file tree. Files will be empty.
+    fn build_file_tree(dest: impl AsRef<Path>, tree: &FileTree) {
         let dest: PathBuf = dest.as_ref().into();
-        for node in FILE_TREE.into_iter() {
+        for node in tree.into_iter() {
             match node {
                 Node::File(path) => fs::write(dest.clone().join(path), "").unwrap(),
                 Node::Dir(path, _) => fs::create_dir(dest.clone().join(path)).unwrap(),
@@ -136,19 +164,67 @@ mod tests {
 
     fn check_contents(src: impl AsRef<Path>, expected: &FileTree) -> bool {
         let src: PathBuf = src.as_ref().into();
+        let mut file_paths: HashSet<_> = fs::read_dir(&src)
+            .unwrap()
+            .map(|entry| entry.unwrap().path().canonicalize().unwrap())
+            .collect();
         expected.into_iter().all(|node| match node {
-            Node::File(path) => fs::exists(src.clone().join(path)).unwrap(),
-            Node::Dir(path, _) => fs::exists(src.clone().join(path)).unwrap(),
-        })
+            Node::File(path) => file_paths.remove(&src.clone().join(path).canonicalize().unwrap()),
+            Node::Dir(path, _) => {
+                file_paths.remove(&src.clone().join(path).canonicalize().unwrap())
+            }
+        }) && file_paths.is_empty()
     }
 
-    // #[test]
-    // fn old_contents_are_saved_after_swap() {
-    //     let swapper = create_swapper();
-    //
-    //     swapper.new_version();
-    // }
-    //
-    // #[test]
-    // fn new_contents_become_active_after_swap() {}
+    // DirSwap Basic Concept: active dir has only active, the versions dir only has inactive versions
+    // stored by the name provided. The subfolders in version_dir only store the data and nothing
+    // else.
+
+    #[test]
+    fn primary_dir_is_not_modified_on_creation() {
+        let primary_dir = create_temp_dir();
+        build_file_tree(primary_dir, &DUMMY_FILE_TREE_1);
+
+        let (_, _, swapper) = create_swapper(Some(primary_dir), None);
+
+        assert!(check_contents(primary_dir, &DUMMY_FILE_TREE_1));
+    }
+
+    #[test]
+    fn new_versions_are_empty() {
+        let (_, _, swapper) = create_swapper(None, None);
+
+        let new_version_path = swapper.new_version("Example2");
+
+        assert!(check_contents(new_version_path, &FileTree(vec![])));
+    }
+
+    #[test]
+    fn old_contents_are_restored_after_two_swaps() {
+        let primary_dir = create_temp_dir();
+        build_file_tree(primary_dir, &DUMMY_FILE_TREE_1);
+
+        let (_, _, swapper) = create_swapper(Some(primary_dir), None);
+        let example2_path = swapper.new_version("Example2");
+        build_file_tree(example2_path, &DUMMY_FILE_TREE_2);
+
+        swapper.set_active("Example2");
+        swapper.set_active(DEFAULT_PRIMARY_NAME);
+
+        assert!(check_contents(primary_dir, &DUMMY_FILE_TREE_1));
+    }
+
+    #[test]
+    fn new_contents_replace_old_after_swap() {
+        let primary_dir = create_temp_dir();
+        build_file_tree(primary_dir, &DUMMY_FILE_TREE_1);
+
+        let (_, _, swapper) = create_swapper(Some(primary_dir), None);
+        let example2_path = swapper.new_version("Example2");
+        build_file_tree(example2_path, &DUMMY_FILE_TREE_2);
+
+        swapper.set_active("Example2");
+
+        assert!(check_contents(primary_dir, &DUMMY_FILE_TREE_2));
+    }
 }
