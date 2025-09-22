@@ -44,12 +44,13 @@ mod tests {
     //
     //     DirSwapper::new(primary_dir, versions_dir);
     // }
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     enum Node {
         File(PathBuf),
         Dir(PathBuf, Vec<Node>),
     }
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
+    /// All file paths must be relative to the root
     struct FileTree(Vec<Node>);
 
     impl<'a> IntoIterator for &'a FileTree {
@@ -65,13 +66,14 @@ mod tests {
             }
         }
     }
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct FileTreeIter<'a> {
         node_tree: &'a FileTree,
         curr: Option<&'a Node>,
         stack: Vec<&'a Node>,
         at_head: bool,
     }
+    /// Pre-order itearaton of the file tree
     impl<'a> Iterator for FileTreeIter<'a> {
         type Item = &'a Node;
 
@@ -81,7 +83,8 @@ mod tests {
                     self.curr = children.get(0);
                     for child in children
                         .split_at_checked(1)
-                        .map_or_default(|(_, right)| right)
+                        // TODO: Replace with map_or_default when it stablizes
+                        .map_or_else(|| -> &[Node] { Default::default() }, |(_, right)| right)
                         .iter()
                         .rev()
                     {
@@ -96,7 +99,8 @@ mod tests {
                         .node_tree
                         .0
                         .split_at_checked(1)
-                        .map_or_default(|(_, right)| right)
+                        // TODO: Replace with map_or_default when it stablizes
+                        .map_or_else(|| -> &[Node] { Default::default() }, |(_, right)| right)
                         .iter()
                         .rev()
                     {
@@ -112,16 +116,30 @@ mod tests {
         }
     }
 
-    static FILE_TREE: LazyLock<Vec<Node>> = LazyLock::new(|| {
-        vec![
+    static FILE_TREE: LazyLock<FileTree> = LazyLock::new(|| {
+        FileTree(vec![
             Node::File("file1.txt".into()),
             Node::File("file2.txt".into()),
-            Node::Dir("inner".into(), vec![Node::File("file3.txt".into())]),
-        ]
+            Node::Dir("inner".into(), vec![Node::File("inner/file3.txt".into())]),
+        ])
     });
 
-    fn fill_with_dummy_contents(path: impl AsRef<Path>) {
-        let path = PathBuf::new();
+    fn fill_with_dummy_contents(dest: impl AsRef<Path>) {
+        let dest: PathBuf = dest.as_ref().into();
+        for node in FILE_TREE.into_iter() {
+            match node {
+                Node::File(path) => fs::write(dest.clone().join(path), "").unwrap(),
+                Node::Dir(path, _) => fs::create_dir(dest.clone().join(path)).unwrap(),
+            };
+        }
+    }
+
+    fn check_contents(src: impl AsRef<Path>, expected: &FileTree) -> bool {
+        let src: PathBuf = src.as_ref().into();
+        expected.into_iter().all(|node| match node {
+            Node::File(path) => fs::exists(src.clone().join(path)).unwrap(),
+            Node::Dir(path, _) => fs::exists(src.clone().join(path)).unwrap(),
+        })
     }
 
     // #[test]
