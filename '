@@ -33,14 +33,7 @@ impl DirSwapper {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::HashSet,
-        ffi::{OsStr, OsString},
-        fs::{self, DirEntry, ReadDir},
-        hash::{DefaultHasher, Hash},
-        io,
-        ops::Deref,
-        path::Path,
-        sync::LazyLock,
+        collections::HashSet, ffi::{OsStr, OsString}, fs::{self, DirEntry, ReadDir}, hash::{DefaultHasher, Hash}, io, path::Path, sync::LazyLock
     };
 
     use tempfile::TempDir;
@@ -76,9 +69,16 @@ mod tests {
             }
         }
     }
-    #[derive(Default, Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone)]
     /// All file paths must be relative to the root.
     struct FileTree(HashSet<Node>);
+    impl PartialEq for FileTree {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.sort();
+            other.0.sort();
+            self.0 == other.0
+        }
+    }
 
     impl<'a> IntoIterator for &'a FileTree {
         type Item = &'a Node;
@@ -91,17 +91,6 @@ mod tests {
                 stack: Vec::new(),
                 at_head: true,
             }
-        }
-    }
-    impl<'a> From<ReadDir> for FileTree {
-        fn from(value: ReadDir) -> Self {
-            Self::from_iter(value)
-        }
-    }
-    impl FileTree {
-        /// Panics on any error
-        fn from_path(path: impl AsRef<Path>) -> Self {
-            Self::from(fs::read_dir(path).unwrap())
         }
     }
     #[derive(Debug, Clone)]
@@ -150,7 +139,7 @@ mod tests {
         for entry in entries {
             let file_type = entry.as_ref().unwrap().file_type().unwrap();
             if file_type.is_file() {
-                results.insert(Node::File(path.join(entry.unwrap().file_name())));
+                results.(Node::File(path.join(entry.unwrap().file_name())));
             } else if file_type.is_dir() {
                 results.insert(Node::Dir(
                     entry.as_ref().unwrap().file_name().into(),
@@ -172,27 +161,24 @@ mod tests {
     }
 
     static DUMMY_FILE_TREE_1: LazyLock<FileTree> = LazyLock::new(|| {
-        FileTree(HashSet::from([
+        FileTree(vec![
             Node::File("file1.txt".into()),
             Node::File("file2.txt".into()),
-            Node::Dir(
-                "inner".into(),
-                HashSet::from([Node::File("inner/file3.txt".into())]),
-            ),
-        ]))
+            Node::Dir("inner".into(), vec![Node::File("inner/file3.txt".into())]),
+        ])
     });
     static DUMMY_FILE_TREE_2: LazyLock<FileTree> = LazyLock::new(|| {
-        FileTree(HashSet::from([
+        FileTree(vec![
             Node::File("Cargo.toml".into()),
             Node::File("Cargo.lock".into()),
             Node::Dir(
                 "src".into(),
-                HashSet::from([
+                vec![
                     Node::File("src/main.rs".into()),
                     Node::File("src/app.rs".into()),
-                ]),
+                ],
             ),
-        ]))
+        ])
     });
 
     /// Creates the structure of the specific file tree. Files will be empty.
@@ -204,6 +190,14 @@ mod tests {
                 Node::Dir(path, _) => fs::create_dir(dest.clone().join(path)).unwrap(),
             };
         }
+    }
+
+    /// Compares if the structure of the directory in `path` match exactly the `expected`. Only checks
+    /// file structure, not contents.
+    fn is_dir_structure_eq(path: impl AsRef<Path>, expected: &FileTree) -> bool {
+        let file_tree_from_path = FileTree::from_iter(fs::read_dir(path).unwrap());
+        println!("TREE: {:?}", file_tree_from_path);
+        &file_tree_from_path == expected
     }
 
     // DirSwap Basic Concept: active dir has only active, the versions dir only has inactive versions
@@ -218,10 +212,10 @@ mod tests {
         let swapper = new_swapper(Some(primary_dir), None);
 
         println!("PATH: {}", swapper.primary_dir().display());
-        assert_eq!(
-            FileTree::from_path(swapper.primary_dir()),
-            *DUMMY_FILE_TREE_1,
-        );
+        assert!(is_dir_structure_eq(
+            swapper.primary_dir(),
+            &DUMMY_FILE_TREE_1
+        ));
     }
 
     #[test]
@@ -234,10 +228,10 @@ mod tests {
         build_file_tree(swapper.version_dir("Example2").unwrap(), &DUMMY_FILE_TREE_2);
 
         swapper.set_active("Example2").unwrap();
-        assert_eq!(
-            FileTree::from_path(swapper.primary_dir()),
-            *DUMMY_FILE_TREE_2
-        );
+        assert!(is_dir_structure_eq(
+            swapper.primary_dir(),
+            &DUMMY_FILE_TREE_2
+        ));
     }
 
     #[test]
@@ -270,10 +264,10 @@ mod tests {
         swapper.set_active("Example2").unwrap();
         swapper.set_active(DEFAULT_NAME).unwrap();
 
-        assert_eq!(
-            FileTree::from_path(swapper.primary_dir()),
-            *DUMMY_FILE_TREE_1
-        );
+        assert!(is_dir_structure_eq(
+            swapper.primary_dir(),
+            &DUMMY_FILE_TREE_1
+        ));
     }
 
     #[test]
@@ -294,10 +288,10 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
 
-        assert_eq!(
-            FileTree::from_path(swapper.version_dir("Example2").unwrap()),
-            FileTree::default(),
-        );
+        assert!(is_dir_structure_eq(
+            swapper.version_dir("Example2").unwrap(),
+            &FileTree(vec![])
+        ));
     }
 
     #[test]
@@ -312,10 +306,10 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
 
-        assert_eq!(
-            FileTree::from_path(swapper.version_dir("Example2").unwrap()),
-            *DUMMY_FILE_TREE_1,
-        );
+        assert!(is_dir_structure_eq(
+            swapper.version_dir("Example2").unwrap(),
+            &DUMMY_FILE_TREE_1
+        ));
     }
 
     #[test]
@@ -333,10 +327,10 @@ mod tests {
 
         swapper.set_active(DEFAULT_NAME).unwrap();
 
-        assert_eq!(
-            FileTree::from_path(swapper.version_dir("Example2").unwrap()),
-            *DUMMY_FILE_TREE_2
-        );
+        assert!(is_dir_structure_eq(
+            swapper.version_dir("Example2").unwrap(),
+            &DUMMY_FILE_TREE_2
+        ));
     }
 
     #[test]
