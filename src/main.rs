@@ -20,9 +20,11 @@ use anyhow::Result;
 use mediawiki::ApiSync;
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex},
 };
 use steamlocate::SteamDir;
 use strum::Display;
@@ -39,6 +41,10 @@ pub struct SaveSlot {
     path: PathBuf,
 }
 
+// TODO: cache this in $XDG_CACHE_HOME, etc.
+static NAME_CACHE: LazyLock<Mutex<HashMap<GameId, Result<Arc<str>, Arc<anyhow::Error>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::default()));
+
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Display)]
 #[non_exhaustive]
 pub enum GameId {
@@ -46,12 +52,40 @@ pub enum GameId {
     Steam(u32),
 }
 impl GameId {
-    pub fn get_name(&self) -> Result<String> {
-        // TODO: cache this in $XDG_CACHE_HOME, etc.
-        Ok(pcgw::utils::fetch_page_by_id(
-            &ApiSync::new(PCGW_API)?,
-            *self,
-        )?)
+    pub fn get_name(&self) -> Result<Arc<str>, Arc<anyhow::Error>> {
+        let mut name_cache = NAME_CACHE.lock().unwrap();
+        if let Some(result) = name_cache.get(self) {
+            result
+                .as_ref()
+                .map(|err| err.clone())
+                .map_err(|err| err.clone())
+        } else {
+            let api = match ApiSync::new(PCGW_API) {
+                Ok(api) => api,
+                Err(err) => {
+                    name_cache.insert(*self, Err(Arc::new(err.into())));
+                    return name_cache
+                        .get(self)
+                        .unwrap()
+                        .as_ref()
+                        .map(|name| name.clone())
+                        .map_err(|err| err.clone());
+                }
+            };
+            let result = pcgw::utils::fetch_page_by_id(&api, *self);
+            name_cache.insert(
+                *self,
+                result
+                    .map(|name| Arc::from(name))
+                    .map_err(|err| Arc::new(err.into())),
+            );
+            name_cache
+                .get(self)
+                .unwrap()
+                .as_ref()
+                .map(|name| name.clone())
+                .map_err(|err| err.clone())
+        }
     }
 }
 
@@ -115,8 +149,8 @@ impl SaveManager {
             Ok(save_swapper)
         }
     }
-    // Finds the steam directory and loads games from all libraries. Returns `Ok(false)` if no
-    // games or libraries are found but Steam is installed.
+    /// Finds the steam directory and loads games from all libraries. Returns `Ok(false)` if no
+    /// games or libraries are found but Steam is installed.
     pub fn load_steam_library(&mut self) -> Result<bool> {
         let steam_dir = SteamDir::locate()?;
         let api = ApiSync::new(PCGW_API)?;
@@ -329,9 +363,8 @@ fn main() -> Result<()> {
     //     .chain([Ok(String::from("Add")), Ok(String::from("Settings"))])
     //     .collect::<Result<_>>()?;
     //
-    // let terminal = ratatui::init();
-    // let result = App::new().run(terminal);
-    // ratatui::restore();
-    // result
-    Ok(())
+    let terminal = ratatui::init();
+    let result = App::new().run(terminal);
+    ratatui::restore();
+    result
 }
