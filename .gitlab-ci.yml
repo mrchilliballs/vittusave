@@ -58,8 +58,8 @@ test:junit-report:
     reports:
       junit: $CI_PROJECT_DIR/tests/*.xml
 
-deploy:
-  stage: deploy
-  script: echo "Define your deployment script!"
-  environment: production
+# deploy:
+#   stage: deploy
+#   script: echo "Define your deployment script!"
+#   environment: production
 
