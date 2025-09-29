@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData};
 
 use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -16,26 +16,51 @@ use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 use crate::{GameId, SaveManager};
 
 /// The main application which holds the state and logic of the application.
-#[derive(Debug, Default)]
-pub struct App {
+#[derive(Debug)]
+pub struct App<T: CurrentTab> {
     /// Is the application running?
     running: bool,
-    save_swapper: SaveManager,
-    selected_tab: SelectedTab,
+    save_manager: SaveManager,
+    tab_state: TabState<T>,
     steam_located: bool,
+    _tab: Tab<T>,
+}
+impl Default for App<states::Tab1> {
+    fn default() -> Self {
+        let save_manager: SaveManager = Default::default();
+        let tab_state = TabState::new(
+            save_manager
+                .game_data()
+                .keys()
+                .copied()
+                .chain([GameId::Steam(516750)])
+                .chain([GameId::Steam(367520)])
+                .collect::<Vec<_>>(),
+        );
+
+        Self {
+            running: Default::default(),
+            save_manager,
+            steam_located: Default::default(),
+            tab_state,
+            _tab: Tab::default(),
+        }
+    }
 }
 
-impl App {
+impl App<states::Tab1> {
     /// Construct a new instance of [`App`].
     pub fn new() -> Self {
         Self::default()
     }
+}
 
+impl<T: CurrentTab> App<T> {
     /// Run the application's main loop.
     pub fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         self.running = true;
         // TODO: Steam installed popup
-        if let Err(err) = self.save_swapper.load_steam_library() {
+        if let Err(err) = self.save_manager.load_steam_library() {
             match err.downcast::<steamlocate::Error>() {
                 Ok(steamlocate::Error::FailedLocate(LocateError::Backend(_)))
                 | Ok(steamlocate::Error::InvalidSteamDir(_)) => {
@@ -58,25 +83,16 @@ impl App {
     ///
     /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
     /// - <https://github.com/ratatui/ratatui/tree/main/ratatui-widgets/examples>
-    fn render(&mut self, frame: &mut Frame) {
+    fn render(&mut self, frame: &mut Frame)
+    where
+        Tab<T>: Default + StatefulWidget,
+    {
+        let tab: Tab<T> = Tab::default();
+
         let layout =
             Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
-        frame.render_widget(Tabs::new(Tab::iter().map(|tab| tab.to_string())), layout[0]);
-        match self.selected_tab.tab() {
-            Tab::Tab1 => self.selected_tab.render_tab0(
-                frame,
-                layout[1],
-                &self
-                    .save_swapper
-                    .game_data()
-                    .keys()
-                    .copied()
-                    .chain([GameId::Steam(516750)])
-                    .chain([GameId::Steam(367520)])
-                    .collect::<Vec<_>>(),
-            ),
-            Tab::Tab2 => self.selected_tab.render_tab1(frame, frame.area()),
-        };
+        frame.render_widget(Tabs::new(self.tab_state.tab_names()), layout[0]);
+        frame.render_stateful_widget(tab, layout[1], &mut self.tab_state);
 
         // impl Widget for &App {
         //     fn render(self, area: Rect, buf: &mut Buffer) {
@@ -127,7 +143,7 @@ impl App {
 
     /// Handles the key events and updates the state of [`App`].
     fn on_key_event(&mut self, key: KeyEvent) {
-        self.selected_tab.on_key_event(key, &mut self.save_swapper);
+        self.tab_state.on_key_event(key, &mut self.save_manager);
         match (key.modifiers, key.code) {
             // TODO: arrows + hjkl to move menu up and down,
             (_, KeyCode::Esc | KeyCode::Char('q'))
@@ -143,76 +159,133 @@ impl App {
     }
 }
 
+pub trait CurrentTab: private::Sealed + std::fmt::Display + Default {}
+pub mod states {
+    use crate::GameId;
+
+    use super::CurrentTab;
+
+    macro_rules! impl_display {
+        ($struct:ty, $str:expr) => {
+            impl std::fmt::Display for $struct {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, $str)
+                }
+            }
+        };
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Tab1 {
+        pub g_pressed: bool,
+        game_ids: Vec<GameId>,
+    }
+    impl Tab1 {
+        pub fn new(game_ids: Vec<GameId>) -> Self {
+            Self {
+                game_ids,
+                ..Default::default()
+            }
+        }
+    }
+    #[derive(Debug, Default)]
+    pub struct Tab2;
+
+    impl_display!(Tab1, "Games");
+    impl_display!(Tab2, "Saves");
+
+    impl CurrentTab for Tab1 {}
+    impl CurrentTab for Tab2 {}
+}
+
+mod private {
+    use super::states::*;
+
+    pub trait Sealed {}
+
+    impl Sealed for Tab1 {}
+    impl Sealed for Tab2 {}
+}
+
+/// Tabs state machine
+#[derive(Debug)]
+struct Tab<T: CurrentTab>(PhantomData<T>);
+impl Default for Tab<states::Tab1> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+impl Tab<states::Tab1> {
+    fn on_key_event(self, key_event: KeyEvent, state: &mut <Self as StatefulWidget>::State) {}
+}
+
+impl StatefulWidget for Tab<states::Tab1> {
+    type State = TabState<states::Tab1>;
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {}
+}
+
 #[derive(Debug, Default)]
-struct SelectedTab {
-    list_states: HashMap<Tab, ListState>,
-    tab: Tab,
+struct TabContext {
+    selected_game: ListState,
 }
 
-#[derive(Debug, Default, Display, Hash, PartialEq, Eq, Clone, Copy, FromRepr, EnumIter)]
-enum Tab {
-    #[default]
-    #[strum(to_string = "Games")]
-    Tab1,
-    #[strum(to_string = "Saves")]
-    Tab2,
+#[derive(Debug)]
+struct TabState<T: CurrentTab> {
+    ctx: TabContext,
+    state: T,
 }
 
-impl Tab {
-    /// Get the previous tab, if there is no previous tab return the current tab.
-    fn previous(self) -> Self {
-        let current_index: usize = self as usize;
-        let previous_index = current_index.saturating_sub(1);
-        Self::from_repr(previous_index).unwrap_or(self)
-    }
+// #[derive(Debug, Default, Display, Hash, PartialEq, Eq, Clone, Copy, FromRepr, EnumIter)]
+// enum Tab {
+//     #[default]
+//     #[strum(to_string = "Games")]
+//     Tab1,
+//     #[strum(to_string = "Saves")]
+//     Tab2,
+// }
+//
+// impl Tab {
+//     /// Get the previous tab, if there is no previous tab return the current tab.
+//     fn previous(self) -> Self {
+//         let current_index: usize = self as usize;
+//         let previous_index = current_index.saturating_sub(1);
+//         Self::from_repr(previous_index).unwrap_or(self)
+//     }
+//
+//     /// Get the next tab, if there is no next tab return the current tab.
+//     fn next(self) -> Self {
+//         let current_index = self as usize;
+//         let next_index = current_index.saturating_add(1);
+//         Self::from_repr(next_index).unwrap_or(self)
+//     }
+// }
 
-    /// Get the next tab, if there is no next tab return the current tab.
-    fn next(self) -> Self {
-        let current_index = self as usize;
-        let next_index = current_index.saturating_add(1);
-        Self::from_repr(next_index).unwrap_or(self)
-    }
-}
-
-impl SelectedTab {
-    /// Get the previous tab, if there is no previous tab return the current tab.
-    fn previous(mut self) -> Self {
-        self.list_states.remove(&self.tab);
-        SelectedTab {
-            list_states: self.list_states,
-            tab: self.tab.previous(),
+impl TabState<states::Tab1> {
+    fn new(games: Vec<GameId>) -> Self {
+        Self {
+            ctx: Default::default(),
+            state: states::Tab1::new(games),
         }
     }
+}
+
+impl<T: CurrentTab> TabState<T> {
+    /// Get the previous tab, if there is no previous tab return the current tab.
+    // fn previous(mut self) -> Self {
+    //     todo!()
+    // }
 
     /// Get the next tab, if there is no next tab return the current tab.
-    fn next(self) -> Self {
-        // if let Some(list_state) = &self.list_states.get(&self.tab)
-        //     && let None = list_state.selected()
-        // {
-        //     return self;
-        // }
-        SelectedTab {
-            list_states: self.list_states,
-            tab: self.tab.next(),
-        }
-    }
-    /// Return tab's name as a styled `Line`
-    fn title(&self) -> Line<'static> {
-        format!("  {}  ", self.tab)
-            .fg(tailwind::SLATE.c200)
-            .bg(self.palette().c900)
-            .into()
-    }
 
-    fn tab(&self) -> Tab {
-        self.tab
+    fn tab_names(&self) -> Vec<String> {
+        vec![
+            states::Tab1::default().to_string(),
+            states::Tab2::default().to_string(),
+        ]
     }
-
-    fn render_tab0(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
-        let state = self
-            .list_states
-            .entry(self.tab)
-            .or_insert_with(|| ListState::default().with_selected((items.len() > 0).then_some(0)));
+}
+impl TabState<states::Tab1> {
+    fn render(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
         let layout =
             Layout::vertical([Constraint::Percentage(5), Constraint::Percentage(95)]).split(area);
         let instructions = Paragraph::new(Line::from(vec![
@@ -241,59 +314,62 @@ impl SelectedTab {
                         .iter()
                         .map(|item| item.get_name().unwrap().to_string()),
                 )
-                .highlight_style(Style::new().italic()),
+                .highlight_symbol(">>"),
                 layout[1],
-                state,
+                &mut self.ctx.selected_game,
             );
         }
     }
-
-    fn render_tab1(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(Paragraph::new("TODO"), area);
-    }
-
     fn on_key_event(&mut self, key: KeyEvent, save_manager: &mut SaveManager) {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => match &self.tab {
-                tab @ Tab::Tab1 => {
-                    if let Some(list_state) = self.list_states.get_mut(&tab) {
-                        println!("here");
-                        list_state.select_next();
-                    }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => self.ctx.selected_game.select_next(),
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => self.ctx.selected_game.select_previous(),
+            (_, KeyCode::End) | (_, KeyCode::Char('G')) => self.ctx.selected_game.select_last(),
+            (_, KeyCode::Home) | (_, KeyCode::Char('g')) => {
+                if self.state.g_pressed {
+                    self.ctx.selected_game.select_last();
+                } else {
+                    self.state.g_pressed = true;
                 }
-                _ => {}
-            },
-            (_, KeyCode::Up) | (_, KeyCode::Char('h')) => match &self.tab {
-                tab @ Tab::Tab1 => {
-                    if let Some(list_state) = self.list_states.get_mut(&tab) {
-                        list_state.select_previous();
-                    }
-                }
-                _ => {}
-            },
+            }
             // TODO: l or enter to select, moves to next tab
-            (_, KeyCode::Char('a')) => match &self.tab {
-                tab @ Tab::Tab1 => todo!(),
-                _ => {}
-            },
-            _ => {}
+            (_, KeyCode::Left) | (_, KeyCode::Enter) | (_, KeyCode::Char('l')) => self.next,
+            (_, KeyCode::Char('a')) => todo!(),
+            (_, _) => {}
         }
+        self.state.g_pressed = false;
     }
-
-    // /// A block surrounding the tab's content
-    // fn block(self) -> Block<'static> {
-    //     Block::bordered()
-    //         .border_set(symbols::border::PROPORTIONAL_TALL)
-    //         .padding(Padding::horizontal(1))
-    //         .border_style(self.palette().c700)
-    // }
-
-    const fn palette(&self) -> tailwind::Palette {
-        match self.tab {
-            Tab::Tab1 => tailwind::BLUE,
-            Tab::Tab2 => tailwind::EMERALD,
-            // Self::Tab3 => tailwind::INDIGO,
-            // Self::Tab4 => tailwind::RED,
+    fn next(self) -> Result<TabState<states::Tab2>, Self> {
+        if let None = self.ctx.selected_game.selected() {
+            return Err(self);
         }
+        Ok(TabState {
+            ctx: self.ctx,
+            state: states::Tab2::default(),
+        })
     }
 }
+
+impl TabState<states::Tab2> {
+    fn render(&self, frame: &mut Frame, area: Rect) {
+        frame.render_widget(Paragraph::new("TODO"), area);
+    }
+}
+
+// /// A block surrounding the tab's content
+// fn block(self) -> Block<'static> {
+//     Block::bordered()
+//         .border_set(symbols::border::PROPORTIONAL_TALL)
+//         .padding(Padding::horizontal(1))
+//         .border_style(self.palette().c700)
+// }
+
+//     const fn palette(&self) -> tailwind::Palette {
+//         match self.tab {
+//             Tab::Tab1 => tailwind::BLUE,
+//             Tab::Tab2 => tailwind::EMERALD,
+//             // Self::Tab3 => tailwind::INDIGO,
+//             // Self::Tab4 => tailwind::RED,
+//         }
+//     }
+// }
