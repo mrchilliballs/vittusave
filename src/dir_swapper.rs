@@ -2,7 +2,6 @@ use anyhow::{Result, bail};
 use std::{
     fs,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 use crate::utils;

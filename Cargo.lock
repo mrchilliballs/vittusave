@@ -2904,6 +2904,7 @@ dependencies = [
  "anyhow",
  "crossterm 0.29.0",
  "dirs",
+ "either",
  "env_logger",
  "html2text",
  "itertools 0.14.0",
