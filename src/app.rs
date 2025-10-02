@@ -16,15 +16,10 @@ use steamlocate::error::LocateError;
 use crate::{GameId, SaveManager};
 
 trait KeyHandler {
-    type Dest1<T>;
-    type Dest2<T>;
+    type Dest;
 
-    type Dest1State;
-    type Dest2State;
-    fn on_key_event(
-        self,
-        key: KeyEvent,
-    ) -> Either<Self::Dest1<Self::Dest1State>, Self::Dest2<Self::Dest2State>>
+    type DestState;
+    fn on_key_event(self, key: KeyEvent) -> Either<Self, Self::Dest<Self::DestState>>
     where
         Self: Sized;
 }
@@ -35,20 +30,33 @@ pub struct App<T>
 where
     T: CurrentTab,
     Tab<T>: StatefulWidget<State = TabState<T>>,
-    // TabState<T>: KeyHandler<
-    //     Dest1<<TabState<T> as KeyHandler>::Dest1State> = TabState<T>,
-    //     Dest1State = T,
-    //     Dest2<<TabState<T> as KeyHandler>::Dest2State> = TabState<
-    //         <TabState<T> as KeyHandler>::Dest2State,
-    //     >,
-    //     Dest2State: CurrentTab,
-    // >,
 {
     /// Is the application running?
     running: bool,
     save_manager: SaveManager,
     tab_state: TabState<T>,
     steam_located: bool,
+}
+
+impl<T> App<T>
+where
+    T: CurrentTab,
+    Tab<T>: StatefulWidget<State = TabState<T>>,
+{
+    /// Renders the user interface.
+    ///
+    /// This is where you add new widgets. See the following resources for more information:
+    ///
+    /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
+    /// - <https://github.com/ratatui/ratatui/tree/main/ratatui-widgets/examples>
+    fn render(&mut self, frame: &mut Frame) {
+        let layout =
+            Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
+        frame.render_widget(Tabs::new(Tab::<T>::default().tab_names()), layout[0]);
+
+        let tab: Tab<T> = Tab::default();
+        frame.render_stateful_widget(tab, layout[1], &mut self.tab_state);
+    }
 }
 impl Default for App<states::Tab1> {
     fn default() -> Self {
@@ -82,25 +90,20 @@ impl App<states::Tab1> {
 impl<T> App<T>
 where
     T: CurrentTab,
-    TabState<T>: KeyHandler<
-            Dest1State = T,
-            Dest1<T> = TabState<<TabState<T> as KeyHandler>::Dest1State>,
-            Dest2State: CurrentTab,
-            Dest2<<TabState<T> as KeyHandler>::Dest2State> = TabState<
-                <TabState<T> as KeyHandler>::Dest2State,
-            >,
-        >,
     Tab<T>: StatefulWidget<State = TabState<T>>,
-    <TabState<T> as KeyHandler>::Dest1<<TabState<T> as KeyHandler>::Dest1State>: KeyHandler,
-    <TabState<T> as KeyHandler>::Dest2<<TabState<T> as KeyHandler>::Dest2State>: KeyHandler,
+    TabState<T>: KeyHandler,
+    TabState<<TabState<T> as KeyHandler>::DestState>:
+        KeyHandler<DestState: CurrentTab, Dest = TabState<<TabState<T> as KeyHandler>::DestState>>,
+    Tab<T>: StatefulWidget<State = TabState<T>>,
+    <TabState<T> as KeyHandler>::DestState: CurrentTab,
 {
     /// Handles the key events and updates the state of [`App`].
     fn on_key_event(
         mut self,
         key: KeyEvent,
     ) -> Either<
-        App<<TabState<T> as KeyHandler>::Dest1State>,
-        App<<TabState<T> as KeyHandler>::Dest2State>,
+        App<T>,
+        App<<TabState<<TabState<T> as KeyHandler>::DestState> as KeyHandler>::DestState>,
     > {
         match (key.modifiers, key.code) {
             // TODO: arrows + hjkl to move menu up and down,
@@ -111,13 +114,15 @@ where
         }
 
         match self.tab_state.on_key_event(key) {
-            Either::Left(state) => Either::Left(App::<<TabState<T> as KeyHandler>::Dest1State> {
+            Either::Left(state) => Either::Left(Self {
                 tab_state: state,
                 running: self.running,
                 save_manager: self.save_manager,
                 steam_located: self.steam_located,
             }),
-            Either::Right(state) => Either::Right(App::<<TabState<T> as KeyHandler>::Dest2State> {
+            Either::Right(state) => Either::Right(App::<
+                <TabState<<TabState<T> as KeyHandler>::DestState> as KeyHandler>::DestState,
+            > {
                 tab_state: state,
                 running: self.running,
                 save_manager: self.save_manager,
@@ -126,32 +131,13 @@ where
         }
     }
 
-    /// Renders the user interface.
-    ///
-    /// This is where you add new widgets. See the following resources for more information:
-    ///
-    /// - <https://docs.rs/ratatui/latest/ratatui/widgets/index.html>
-    /// - <https://github.com/ratatui/ratatui/tree/main/ratatui-widgets/examples>
-    fn render(&mut self, frame: &mut Frame) {
-        let layout =
-            Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
-        frame.render_widget(Tabs::new(Tab::<T>::default().tab_names()), layout[0]);
-
-        let tab: Tab<T> = Tab::default();
-        frame.render_stateful_widget(tab, layout[1], &mut self.tab_state);
-    }
     /// Reads the crossterm events and updates the state of [`App`].
     ///
     /// If your application needs to perform work in between handling events, you can use the
     /// [`event::poll`] function to check if there are any events available with a timeout.
     fn handle_crossterm_events(
         self,
-    ) -> Result<
-        Either<
-            App<<TabState<T> as KeyHandler>::Dest1State>,
-            App<<TabState<T> as KeyHandler>::Dest2State>,
-        >,
-    > {
+    ) -> Result<Either<App<T>, App<<TabState<T> as KeyHandler>::DestState>>> {
         let event = event::read()?;
         // it's important to check KeyEventKind::Press to avoid handling key release events
         if let Event::Key(key) = event
@@ -182,23 +168,21 @@ where
                 Err(err) => bail!(err),
             }
         }
-        let mut app: Either<
-            App<<TabState<T> as KeyHandler>::Dest1State>,
-            App<<TabState<T> as KeyHandler>::Dest2State>,
-        > = Either::Left(self);
+        let mut app: Either<App<T>, App<<TabState<T> as KeyHandler>::DestState>> =
+            Either::Left(self);
         loop {
-            match app {
+            match &mut app {
                 Either::Left(app) => {
                     if !app.running {
                         break;
                     }
-                    terminal.draw(|frame| self.render(frame))?;
+                    terminal.draw(|frame| app.render(frame))?;
                 }
-                Either::Right(app_) => {
-                    if !app_.running {
+                Either::Right(app) => {
+                    if !app.running {
                         break;
                     }
-                    terminal.draw(|frame| self.render(frame))?;
+                    terminal.draw(|frame| app.render(frame))?;
                 }
             }
             match app {
@@ -284,16 +268,27 @@ impl<T: CurrentTab> Default for Tab<T> {
         Self(PhantomData)
     }
 }
-impl KeyHandler for TabState<states::Tab1> {
-    type Dest1<T> = TabState<Self::Dest1State>;
-    type Dest2<T> = TabState<Self::Dest2State>;
+default impl<T> KeyHandler for TabState<T>
+where
+    T: CurrentTab,
+{
+    type Dest = TabState<T>;
 
-    type Dest1State = states::Tab1;
-    type Dest2State = states::Tab2;
-    fn on_key_event(
-        mut self,
-        key: KeyEvent,
-    ) -> Either<Self::Dest1<Self::Dest1State>, Self::Dest2<Self::Dest2State>>
+    type DestState = T;
+    fn on_key_event(self, key: KeyEvent) -> Either<Self, Self::Dest>
+    where
+        Self: Sized,
+    {
+        let _ = key;
+        Either::Left(self)
+    }
+}
+
+impl KeyHandler for TabState<states::Tab1> {
+    type Dest = TabState<Self::DestState>;
+
+    type DestState = states::Tab2;
+    fn on_key_event(mut self, key: KeyEvent) -> Either<Self, Self::Dest>
     where
         Self: Sized,
     {
@@ -328,24 +323,6 @@ impl KeyHandler for TabState<states::Tab1> {
         }
     }
 }
-impl KeyHandler for TabState<states::Tab2> {
-    type Dest1<T> = TabState<Self::Dest1State>;
-    type Dest2<T> = TabState<Self::Dest2State>;
-    type Dest1State = states::Tab2;
-    type Dest2State = states::Tab2;
-
-    fn on_key_event(
-        self,
-        key: KeyEvent,
-    ) -> Either<Self::Dest1<Self::Dest1State>, Self::Dest2<Self::Dest2State>>
-    where
-        Self: Sized,
-    {
-        let _ = key;
-        Either::Left(self)
-    }
-}
-
 impl<T: CurrentTab> StatefulWidget for Tab<T> {
     type State = TabState<T>;
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {

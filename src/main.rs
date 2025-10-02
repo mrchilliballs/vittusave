@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![feature(specialization)]
 
 // TODO: do some sort of integrity check before loading saves
 // TODO: steam Cloud support (info UT favorites)
