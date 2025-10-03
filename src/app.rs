@@ -4,13 +4,13 @@ use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Direction, Flex, Layout},
+    layout::{Constraint, Layout},
     prelude::*,
     style::{Stylize, palette::tailwind},
     text::Line,
     widgets::{List, ListState, Paragraph, Tabs},
 };
-use steamlocate::error::{LocateError, ValidationError};
+use steamlocate::error::LocateError;
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
 use crate::{GameId, SaveManager};
@@ -63,7 +63,7 @@ impl App {
             Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
         frame.render_widget(Tabs::new(Tab::iter().map(|tab| tab.to_string())), layout[0]);
         match self.selected_tab.tab() {
-            Tab::Tab1 => self.selected_tab.render_tab0(
+            Tab::Tab1 { .. } => self.selected_tab.render_tab1(
                 frame,
                 layout[1],
                 &self
@@ -71,43 +71,15 @@ impl App {
                     .game_data()
                     .keys()
                     .copied()
-                    .chain([GameId::Steam(516750)])
-                    .chain([GameId::Steam(367520)])
+                    .chain([
+                        GameId::Steam(516750),
+                        GameId::Steam(367520),
+                        GameId::Steam(730),
+                    ])
                     .collect::<Vec<_>>(),
             ),
-            Tab::Tab2 => self.selected_tab.render_tab1(frame, frame.area()),
+            Tab::Tab2 => self.selected_tab.render_tab2(frame, layout[1]),
         };
-
-        // impl Widget for &App {
-        //     fn render(self, area: Rect, buf: &mut Buffer) {
-        //         use Constraint::{Length, Min};
-        //         let vertical = Layout::vertical([Length(1), Min(0), Length(1)]);
-        //         let [header_area, inner_area, footer_area] = vertical.areas(area);
-        //
-        //         let horizontal = Layout::horizontal([Min(0), Length(20)]);
-        //         let [tabs_area, title_area] = horizontal.areas(header_area);
-        //
-        //         render_title(title_area, buf);
-        //         self.render_tabs(tabs_area, buf);
-        //         self.selected_tab.render(inner_area, buf);
-        //         render_footer(footer_area, buf);
-        //     }
-        // }
-
-        // let title = Line::from("Ratatui Simple Template")
-        //     .bold()
-        //     .blue()
-        //     .centered();
-        // let text = "Hello, Ratatui!\n\n\
-        //     Created using https://github.com/ratatui/templates\n\
-        //     Press `Esc`, `Ctrl-C` or `q` to stop running.";
-        // let list = List::new(self.)
-        // frame.render_widget(
-        //     Paragraph::new(text)
-        //         .block(Block::bordered().title(title))
-        //         .centered(),
-        //     layout[0],
-        // )
     }
 
     /// Reads the crossterm events and updates the state of [`App`].
@@ -128,6 +100,7 @@ impl App {
     /// Handles the key events and updates the state of [`App`].
     fn on_key_event(&mut self, key: KeyEvent) {
         self.selected_tab.on_key_event(key, &mut self.save_swapper);
+
         match (key.modifiers, key.code) {
             // TODO: arrows + hjkl to move menu up and down,
             (_, KeyCode::Esc | KeyCode::Char('q'))
@@ -143,34 +116,57 @@ impl App {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SelectedTab {
     list_states: HashMap<Tab, ListState>,
     tab: Tab,
 }
+impl Default for SelectedTab {
+    fn default() -> Self {
+        Self {
+            list_states: HashMap::from([(
+                Tab::Tab1 {
+                    g_pressed: Default::default(),
+                },
+                ListState::default().with_selected((items.len() > 0).then_some(0)),
+            )]),
+            tab: Default,
+        }
+    }
+}
 
-#[derive(Debug, Default, Display, Hash, PartialEq, Eq, Clone, Copy, FromRepr, EnumIter)]
+#[derive(Debug, Display, Hash, PartialEq, Eq, Clone, Copy, FromRepr, EnumIter)]
 enum Tab {
-    #[default]
     #[strum(to_string = "Games")]
-    Tab1,
+    Tab1 { g_pressed: bool },
     #[strum(to_string = "Saves")]
     Tab2,
+}
+impl Default for Tab {
+    fn default() -> Self {
+        Tab::Tab1 {
+            g_pressed: Default::default(),
+        }
+    }
 }
 
 impl Tab {
     /// Get the previous tab, if there is no previous tab return the current tab.
     fn previous(self) -> Self {
-        let current_index: usize = self as usize;
-        let previous_index = current_index.saturating_sub(1);
-        Self::from_repr(previous_index).unwrap_or(self)
+        match self {
+            tab @ Tab::Tab1 { .. } => tab,
+            Tab::Tab2 => Tab::Tab1 {
+                g_pressed: Default::default(),
+            },
+        }
     }
 
     /// Get the next tab, if there is no next tab return the current tab.
     fn next(self) -> Self {
-        let current_index = self as usize;
-        let next_index = current_index.saturating_add(1);
-        Self::from_repr(next_index).unwrap_or(self)
+        match self {
+            Tab::Tab1 { .. } => Tab::Tab2,
+            tab @ Tab::Tab2 => tab,
+        }
     }
 }
 
@@ -186,11 +182,6 @@ impl SelectedTab {
 
     /// Get the next tab, if there is no next tab return the current tab.
     fn next(self) -> Self {
-        // if let Some(list_state) = &self.list_states.get(&self.tab)
-        //     && let None = list_state.selected()
-        // {
-        //     return self;
-        // }
         SelectedTab {
             list_states: self.list_states,
             tab: self.tab.next(),
@@ -208,11 +199,8 @@ impl SelectedTab {
         self.tab
     }
 
-    fn render_tab0(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
-        let state = self
-            .list_states
-            .entry(self.tab)
-            .or_insert_with(|| ListState::default().with_selected((items.len() > 0).then_some(0)));
+    fn render_tab1(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
+        let state = self.list_states.get(&self.tab).unwrap();
         let layout =
             Layout::vertical([Constraint::Percentage(5), Constraint::Percentage(95)]).split(area);
         let instructions = Paragraph::new(Line::from(vec![
@@ -241,56 +229,64 @@ impl SelectedTab {
                         .iter()
                         .map(|item| item.get_name().unwrap().to_string()),
                 )
-                .highlight_style(Style::new().italic()),
+                .highlight_symbol(">>"),
                 layout[1],
                 state,
             );
         }
     }
 
-    fn render_tab1(&self, frame: &mut Frame, area: Rect) {
+    fn render_tab2(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new("TODO"), area);
     }
 
     fn on_key_event(&mut self, key: KeyEvent, save_manager: &mut SaveManager) {
-        match (key.modifiers, key.code) {
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => match &self.tab {
-                tab @ Tab::Tab1 => {
-                    if let Some(list_state) = self.list_states.get_mut(&tab) {
-                        println!("here");
+        // FIXME:
+        let list_state = self.list_states.get_mut(&self.tab).unwrap();
+        let tab = &mut self.tab;
+        match tab {
+            Tab::Tab1 { g_pressed } => {
+                let g_pressed_copy = *g_pressed;
+                if let KeyCode::Char('g') = key.code {
+                    *g_pressed = !*g_pressed;
+                } else {
+                    *g_pressed = false;
+                }
+                match (key.modifiers, key.code) {
+                    (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                         list_state.select_next();
                     }
-                }
-                _ => {}
-            },
-            (_, KeyCode::Up) | (_, KeyCode::Char('h')) => match &self.tab {
-                tab @ Tab::Tab1 => {
-                    if let Some(list_state) = self.list_states.get_mut(&tab) {
+                    (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                         list_state.select_previous();
                     }
+                    (_, KeyCode::Right) | (_, KeyCode::Char('l')) | (_, KeyCode::Enter) => {
+                        *tab = tab.next()
+                    }
+                    (_, KeyCode::Char('a')) => todo!(),
+                    (_, KeyCode::Home) | (_, KeyCode::Char('G')) => {
+                        list_state.select_last();
+                    }
+                    (_, KeyCode::End) | (_, KeyCode::Char('g')) => {
+                        println!("Pressed once");
+                        if g_pressed_copy {
+                            println!("it's true");
+                            list_state.select_first();
+                        }
+                    }
+                    _ => {}
                 }
+            }
+
+            Tab::Tab2 => match (key.modifiers, key.code) {
+                (_, KeyCode::Left) | (_, KeyCode::Char('h')) => self.tab = self.tab.previous(),
                 _ => {}
             },
-            // TODO: l or enter to select, moves to next tab
-            (_, KeyCode::Char('a')) => match &self.tab {
-                tab @ Tab::Tab1 => todo!(),
-                _ => {}
-            },
-            _ => {}
         }
     }
 
-    // /// A block surrounding the tab's content
-    // fn block(self) -> Block<'static> {
-    //     Block::bordered()
-    //         .border_set(symbols::border::PROPORTIONAL_TALL)
-    //         .padding(Padding::horizontal(1))
-    //         .border_style(self.palette().c700)
-    // }
-
     const fn palette(&self) -> tailwind::Palette {
         match self.tab {
-            Tab::Tab1 => tailwind::BLUE,
+            Tab::Tab1 { .. } => tailwind::BLUE,
             Tab::Tab2 => tailwind::EMERALD,
             // Self::Tab3 => tailwind::INDIGO,
             // Self::Tab4 => tailwind::RED,
