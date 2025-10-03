@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![feature(specialization)]
 
 // TODO: do some sort of integrity check before loading saves
 // TODO: steam Cloud support (info UT favorites)
@@ -21,6 +20,7 @@ use anyhow::Result;
 use mediawiki::ApiSync;
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
