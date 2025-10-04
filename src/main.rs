@@ -20,7 +20,6 @@ use anyhow::Result;
 use mediawiki::ApiSync;
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::RefCell,
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
@@ -52,6 +51,7 @@ pub enum GameId {
     Steam(u32),
 }
 impl GameId {
+    // TODO: See if I can figure out a better return type
     pub fn get_name(&self) -> Result<Arc<str>, Arc<anyhow::Error>> {
         let mut name_cache = NAME_CACHE.lock().unwrap();
         if let Some(result) = name_cache.get(self) {

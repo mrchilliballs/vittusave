@@ -1,23 +1,18 @@
-use std::{
-    collections::HashMap,
-    rc::Rc,
-    sync::{Arc, LazyLock},
-};
-
 use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
     prelude::*,
+    style::Color,
     style::{Stylize, palette::tailwind},
     text::Line,
     widgets::{List, ListState, Paragraph, Tabs},
 };
 use steamlocate::error::LocateError;
-use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
+use strum::{Display, EnumIter, FromRepr, IntoEnumIterator, IntoStaticStr};
 
-use crate::{GameId, SaveManager};
+use crate::{GameId, SaveManager, utils};
 
 /// The main application which holds the state and logic of the application.
 #[derive(Debug, Default)]
@@ -68,10 +63,15 @@ impl App {
     fn render(&mut self, frame: &mut Frame) {
         let layout =
             Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
+        let instructions = Paragraph::new(Line::from(utils::format_keybindings(
+            self.selected_tab.keybindings(),
+        )))
+        .centered();
         frame.render_widget(
-            Tabs::new(TabState::iter().map(|tab| tab.to_string())),
+            Tabs::new(TabState::iter().map(|tab| -> &'static str { tab.into() })),
             layout[0],
         );
+        frame.render_widget(instructions, layout[0]);
         match self.selected_tab.tab() {
             TabState::Tab1 { .. } => self.selected_tab.render_tab1(
                 frame,
@@ -81,6 +81,7 @@ impl App {
                     .game_data()
                     .keys()
                     .copied()
+                    // TODO: remove after Steam fetching is fixed
                     .chain([
                         GameId::Steam(516750),
                         GameId::Steam(367520),
@@ -153,26 +154,90 @@ impl Default for SelectedTab {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-struct KeyBinding {
+// TODO: change visbilities when save manager and utils have better paths
+pub struct ActionKeyBinding {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
 /// Information intended for user display on a key binding or bindings that all perform *one* action.
 #[derive(Debug)]
-struct BindingHelp<'a> {
-    pub description: &'a str,
+// TODO: change visbilities when save manager and utils have better paths
+pub struct ActionStyle {
     /// Intended display style of the description
     pub description_style: Style,
     /// Intended display style of the key character(s)
     pub key_style: Style,
 }
 
-#[derive(Debug, Display, Clone, Copy, FromRepr, EnumIter)]
+#[derive(Debug, IntoStaticStr, Display, Hash, PartialEq, Eq)]
+#[non_exhaustive]
+// TODO: change visbilities when save manager and utils have better paths
+pub enum Action {
+    #[strum(serialize = "add game")]
+    AddGame,
+    #[strum(serialize = "delete game")]
+    RemoveGame,
+    // #[strum(serialize = "go back")]
+    // Back,
+    // #[strum(serialize = "quit")]
+    // Quit,
+}
+impl Action {
+    pub fn bindings(&self) -> &'static [ActionKeyBinding] {
+        match self {
+            Action::AddGame => &[ActionKeyBinding {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+            }],
+            Action::RemoveGame => &[
+                ActionKeyBinding {
+                    code: KeyCode::Delete,
+                    modifiers: KeyModifiers::NONE,
+                },
+                ActionKeyBinding {
+                    code: KeyCode::Char('d'),
+                    modifiers: KeyModifiers::NONE,
+                },
+            ],
+        }
+    }
+    pub fn display_style(&self) -> &'static ActionStyle {
+        match self {
+            Action::AddGame => {
+                const {
+                    &ActionStyle {
+                        description_style: Style::new(),
+                        key_style: Style::new().add_modifier(Modifier::ITALIC).fg(Color::Blue),
+                    }
+                }
+            }
+            Action::RemoveGame => {
+                const {
+                    &ActionStyle {
+                        description_style: Style::new(),
+                        key_style: Style::new()
+                            .add_modifier(Modifier::ITALIC)
+                            .fg(Color::LightRed),
+                    }
+                }
+            } // Action::Back => {
+              //     const {
+              //         &ActionStyle {
+              //             description_style: Style::new(),
+              //             key_style: Style::new().add_modifier(Modifier::ITALIC).fg(Color::Cyan),
+              //         }
+              //     }
+              // }
+        }
+    }
+}
+
+#[derive(Debug, IntoStaticStr, Display, Clone, Copy, FromRepr, EnumIter)]
 enum TabState {
-    #[strum(to_string = "Games")]
+    #[strum(serialize = "Games")]
     Tab1 { g_pressed: bool },
-    #[strum(to_string = "Saves")]
+    #[strum(serialize = "Saves")]
     Tab2,
 }
 
@@ -233,72 +298,10 @@ impl SelectedTab {
     }
 
     // Returns a list keybindings used in the current tab and its description
-    fn keybindings(&self) -> &'static LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> {
-        // TODO: Display like "a: add game; d: delete game", centered
-        static TAB_1_BINDING_HELP: LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> =
-            LazyLock::new(|| {
-                let add_game_help = Arc::new(BindingHelp {
-                    description: "add game",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().light_blue(),
-                });
-                let delete_game_help = Arc::new(BindingHelp {
-                    description: "delete_game",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().light_red(),
-                });
-                HashMap::from([
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('d'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        delete_game_help,
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('a'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        add_game_help,
-                    ),
-                ])
-            });
-        static TAB_2_BINDING_HELP: LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> =
-            LazyLock::new(|| {
-                let back_help = Arc::new(BindingHelp {
-                    description: "go back",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().red(),
-                });
-                HashMap::from([
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('h'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Left,
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Esc,
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                ])
-            });
-
+    fn keybindings(&self) -> &'static [Action] {
         match self.state {
-            TabState::Tab1 { .. } => &TAB_1_BINDING_HELP,
-            TabState::Tab2 => &TAB_2_BINDING_HELP,
+            TabState::Tab1 { .. } => &[Action::AddGame, Action::RemoveGame],
+            TabState::Tab2 => &[],
         }
     }
 
@@ -326,10 +329,11 @@ impl SelectedTab {
             frame.render_widget(empty_message, area);
         } else {
             frame.render_stateful_widget(
-                // FIXME: handle errors and change this because it takes long
+                // FIXME: handle errors and change this because it's   taking   too   long
                 List::new(
                     items
                         .iter()
+                        // TODO: something other than to_string?
                         .map(|item| item.get_name().unwrap().to_string()),
                 )
                 .highlight_symbol(">>"),
@@ -372,7 +376,7 @@ impl SelectedTab {
                         *tab = tab.next()
                     }
                     (_, KeyCode::Char('a')) => todo!(),
-                    (_, KeyCode::Char('d')) => todo!(),
+                    (_, KeyCode::Char('d')) | (_, KeyCode::Delete) => todo!(),
                     (_, KeyCode::Home) | (_, KeyCode::Char('G')) => {
                         self.ctx.game_selection.select_last();
                     }
