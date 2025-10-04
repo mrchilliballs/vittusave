@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    rc::Rc,
-    sync::{Arc, LazyLock},
-};
+use std::collections::HashMap;
 
 use anyhow::{Result, bail};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -39,7 +35,6 @@ impl App {
     pub fn run(mut self, mut terminal: DefaultTerminal) -> Result<()> {
         self.running = true;
         // TODO: Steam installed popup
-        // TODO: Uncomment when it's time
         /*
         if let Err(err) = self.save_swapper.load_steam_library() {
             match err.downcast::<steamlocate::Error>() {
@@ -81,11 +76,11 @@ impl App {
                     .game_data()
                     .keys()
                     .copied()
-                    .chain([
-                        GameId::Steam(516750),
-                        GameId::Steam(367520),
-                        GameId::Steam(730),
-                    ])
+                    // .chain([
+                    //     GameId::Steam(516750),
+                    //     GameId::Steam(367520),
+                    //     GameId::Steam(730),
+                    // ])
                     .collect::<Vec<_>>(),
             ),
             TabState::Tab2 => self.selected_tab.render_tab2(frame, layout[1]),
@@ -109,14 +104,14 @@ impl App {
 
     /// Handles the key events and updates the state of [`App`].
     fn on_key_event(&mut self, key: KeyEvent) {
-        match (key.modifiers, key.code) {
-            (_, KeyCode::Char('q'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
-            _ => {}
-        }
+        self.selected_tab.on_key_event(key, &mut self.save_swapper);
 
-        if self.selected_tab.on_key_event(key, &mut self.save_swapper) {
-            self.quit();
+        match (key.modifiers, key.code) {
+            // TODO: arrows + hjkl to move menu up and down,
+            (_, KeyCode::Esc | KeyCode::Char('q'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
+            // Add other key handlers here.
+            _ => {}
         }
     }
 
@@ -133,39 +128,15 @@ struct SelectedTabContext {
 impl Default for SelectedTabContext {
     fn default() -> Self {
         Self {
-            game_selection: ListState::default().with_selected(Some(0)),
+            game_selection: ListState::default().with_selected(Some(1)),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct SelectedTab {
     ctx: SelectedTabContext,
     state: TabState,
-}
-impl Default for SelectedTab {
-    fn default() -> Self {
-        Self {
-            ctx: Default::default(),
-            state: Default::default(),
-        }
-    }
-}
-
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-struct KeyBinding {
-    pub code: KeyCode,
-    pub modifiers: KeyModifiers,
-}
-
-/// Information intended for user display on a key binding or bindings that all perform *one* action.
-#[derive(Debug)]
-struct BindingHelp<'a> {
-    pub description: &'a str,
-    /// Intended display style of the description
-    pub description_style: Style,
-    /// Intended display style of the key character(s)
-    pub key_style: Style,
 }
 
 #[derive(Debug, Display, Clone, Copy, FromRepr, EnumIter)]
@@ -175,7 +146,6 @@ enum TabState {
     #[strum(to_string = "Saves")]
     Tab2,
 }
-
 impl Default for TabState {
     fn default() -> Self {
         TabState::Tab1 {
@@ -232,98 +202,27 @@ impl SelectedTab {
         self.state
     }
 
-    // Returns a list keybindings used in the current tab and its description
-    fn keybindings(&self) -> &'static LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> {
-        // TODO: Display like "a: add game; d: delete game", centered
-        static TAB_1_BINDING_HELP: LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> =
-            LazyLock::new(|| {
-                let add_game_help = Arc::new(BindingHelp {
-                    description: "add game",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().light_blue(),
-                });
-                let delete_game_help = Arc::new(BindingHelp {
-                    description: "delete_game",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().light_red(),
-                });
-                HashMap::from([
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('d'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        delete_game_help,
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('a'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        add_game_help,
-                    ),
-                ])
-            });
-        static TAB_2_BINDING_HELP: LazyLock<HashMap<KeyBinding, Arc<BindingHelp<'static>>>> =
-            LazyLock::new(|| {
-                let back_help = Arc::new(BindingHelp {
-                    description: "go back",
-                    description_style: Style::new(),
-                    key_style: Style::new().italic().red(),
-                });
-                HashMap::from([
-                    (
-                        KeyBinding {
-                            code: KeyCode::Char('h'),
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Left,
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                    (
-                        KeyBinding {
-                            code: KeyCode::Esc,
-                            modifiers: KeyModifiers::NONE,
-                        },
-                        Arc::clone(&back_help),
-                    ),
-                ])
-            });
-
-        match self.state {
-            TabState::Tab1 { .. } => &TAB_1_BINDING_HELP,
-            TabState::Tab2 => &TAB_2_BINDING_HELP,
-        }
-    }
-
     fn render_tab1(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
-        // let layout =
-        //     Layout::vertical([Constraint::Percentage(5), Constraint::Percentage(95)]).split(area);
-        // let instructions = Paragraph::new(Line::from(vec![
-        //     Span::styled("a", Style::new().italic().light_blue()),
-        //     Span::raw(": add game; "),
-        //     Span::styled("d", Style::new().italic().light_red()),
-        //     Span::raw(": delete game"),
-        // ]))
-        // .centered();
+        let layout =
+            Layout::vertical([Constraint::Percentage(5), Constraint::Percentage(95)]).split(area);
+        let instructions = Paragraph::new(Line::from(vec![
+            Span::styled("a", Style::new().italic().light_blue()),
+            Span::raw(": add game; "),
+            Span::styled("d", Style::new().italic().light_red()),
+            Span::raw(": delete game"),
+        ]))
+        .centered();
         let empty_message = Paragraph::new(Line::from(vec![
             Span::raw("No games found. Press "),
-            // TODO: Lookup actions in keybindings cuz they might change
             Span::styled("a", Style::new().italic().light_blue()),
             Span::raw(" to add a new one."),
         ]))
         .centered();
         // TODO: Title
-        // frame.render_widget(instructions, layout[0]);
-        // TODO: Show message/help if no games are addded, suggest Steam?
+        frame.render_widget(instructions, layout[0]);
+        // TODO: Show message/help if no games are addded.
         if items.is_empty() {
-            frame.render_widget(empty_message, area);
+            frame.render_widget(empty_message, layout[1]);
         } else {
             frame.render_stateful_widget(
                 // FIXME: handle errors and change this because it takes long
@@ -333,7 +232,7 @@ impl SelectedTab {
                         .map(|item| item.get_name().unwrap().to_string()),
                 )
                 .highlight_symbol(">>"),
-                area,
+                layout[1],
                 &mut self.ctx.game_selection,
             );
         }
@@ -343,13 +242,8 @@ impl SelectedTab {
         frame.render_widget(Paragraph::new("TODO"), area);
     }
 
-    /// Handles keyboard events for corresponding tabs. Returns `true` if user requested to quit,
-    /// otherwise false.
-    fn on_key_event(&mut self, key: KeyEvent, save_manager: &mut SaveManager) -> bool {
-        // Note: make sure to provide documentation for a binding in the `BindingHelp` struct
-        // returned by `self.keybindings()`.
+    fn on_key_event(&mut self, key: KeyEvent, save_manager: &mut SaveManager) {
         let tab = &mut self.state;
-        // TODO: Lookup actions in keybindings and check if they match
         match tab {
             TabState::Tab1 { g_pressed } => {
                 let g_pressed_copy = *g_pressed;
@@ -359,9 +253,6 @@ impl SelectedTab {
                     *g_pressed = false;
                 }
                 match (key.modifiers, key.code) {
-                    (_, KeyCode::Left) | (_, KeyCode::Char('h')) | (_, KeyCode::Esc) => {
-                        return true;
-                    }
                     (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                         self.ctx.game_selection.select_next();
                     }
@@ -372,7 +263,6 @@ impl SelectedTab {
                         *tab = tab.next()
                     }
                     (_, KeyCode::Char('a')) => todo!(),
-                    (_, KeyCode::Char('d')) => todo!(),
                     (_, KeyCode::Home) | (_, KeyCode::Char('G')) => {
                         self.ctx.game_selection.select_last();
                     }
@@ -388,13 +278,10 @@ impl SelectedTab {
             }
 
             TabState::Tab2 => match (key.modifiers, key.code) {
-                (_, KeyCode::Left) | (_, KeyCode::Char('h')) | (_, KeyCode::Esc) => {
-                    self.state = self.state.previous()
-                }
+                (_, KeyCode::Left) | (_, KeyCode::Char('h')) => self.state = self.state.previous(),
                 _ => {}
             },
         }
-        false
     }
 
     const fn palette(&self) -> tailwind::Palette {
