@@ -6,26 +6,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mediawiki::{MediaWikiError, api_sync::ApiSync};
+use mediawiki::api_sync::ApiSync;
 use thiserror::Error;
 
+use super::utils;
 use crate::{
-    GameId,
-    pcgw::{self, utils::ExpansionParams},
+    pcgw::{PCGWError, utils::ExpansionParams},
+    save_manager::GameId,
 };
 
 // TODO: rename this error type
-#[derive(Debug, Error)]
-pub enum PCGWError {
-    #[error("failed to fetch data from MediaWiki API")]
-    MediaWikiError(#[from] MediaWikiError),
-    #[error("parse error")]
-    ParseError,
-    #[error("error reading or rendering note HTML")]
-    NoteError(#[from] html2text::Error),
-    #[error("no data returned by the server")]
-    NotFound,
-}
 
 #[derive(Debug, Error)]
 pub enum LocationError {
@@ -60,7 +50,7 @@ impl Location {
     }
     pub fn expand_path(&mut self, install_dir: &Path, user_id: u64) -> Result<(), LocationError> {
         self.path.replace(
-            pcgw::utils::replace_path_abbrs(
+            utils::replace_path_abbrs(
                 &self.path_str,
                 None,
                 ExpansionParams {
@@ -96,7 +86,7 @@ impl PCGWSaveMeta {
     // TODO: return Self back in error
     pub fn build(api: &ApiSync, id: GameId) -> Result<Self, PCGWError> {
         Ok(PCGWSaveMeta {
-            locations: pcgw::utils::get_location_data(api, id)?,
+            locations: utils::get_location_data(api, id)?,
             extra_notes: Vec::new(),
         })
     }

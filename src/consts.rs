@@ -1,5 +1,7 @@
 use std::{path::PathBuf, sync::LazyLock};
 
+// TODO: move these to relevant structs when possible
+
 // TOOD: Proper error handling
 pub static HOME_DIR: LazyLock<PathBuf> =
     LazyLock::new(|| dirs::home_dir().expect("no home directory found"));

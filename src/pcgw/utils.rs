@@ -14,13 +14,14 @@ use log::{debug, info, warn /*, trace*/};
 use itertools::Itertools;
 
 use crate::{
-    GameId,
     pcgw::{
         PCGWError,
         api::{Location, LocationKind},
     },
+    save_manager::GameId,
 };
 
+// TODO: Move methods to relevant struct or remove them
 /// Looks up a Steam ID in the PCGW and returns the name of the page, if it exists
 pub fn fetch_page_by_id(api: &ApiSync, steam_id: GameId) -> Result<String, PCGWError> {
     #[allow(unreachable_patterns)]
@@ -115,7 +116,7 @@ const STEAM_FOLDER: &str = "<Steam-folder>";
 const USER_ID: &str = "<user-id>";
 
 #[derive(Debug, Clone)]
-pub(super) struct ExpansionParams<'a> {
+pub struct ExpansionParams<'a> {
     pub install_dir: &'a Path,
     pub user_id: u64,
 }
@@ -123,7 +124,8 @@ pub(super) struct ExpansionParams<'a> {
 /// Returns None if an undefined abbreviation in the path
 /// Supports non-unicode encoded env variable values
 /// Finds first match only
-pub(super) fn replace_path_abbrs(
+// TODO: Fix this super and others
+pub fn replace_path_abbrs(
     path: &str,
     os: Option<&str>,
     params: ExpansionParams,

@@ -1,14 +1,13 @@
 use anyhow::Result;
-use crossterm::event::KeyModifiers;
-use ratatui::text::Span;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
-    fs, io, iter,
+    fs, io,
     path::{Path, PathBuf},
 };
 
-use crate::{app::Action, consts::DATA_DIR};
+use crate::consts::DATA_DIR;
 
+// TODO: Move methods to relevant struct or remove them
 fn make_data_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = DATA_DIR.clone();
     path.push(filename);
@@ -65,39 +64,4 @@ pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<
     Ok(())
 }
 
-pub fn format_keybindings(bindings: &[Action]) -> Vec<Span> {
-    bindings
-        .iter()
-        .enumerate()
-        .flat_map(|(i, action)| {
-            let prev_comma = if i > 0 { "; " } else { "" };
-            iter::once(Span::raw(prev_comma)).chain(
-                action
-                    .bindings()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, binding)| {
-                        let prev_comma = if i > 0 { ", " } else { "" };
-                        if binding.modifiers == KeyModifiers::NONE {
-                            Span::styled(
-                                prev_comma.to_string() + &binding.code.to_string(),
-                                action.display_style().key_style,
-                            )
-                        } else {
-                            Span::styled(
-                                prev_comma.to_string()
-                                    + &binding.modifiers.to_string()
-                                    + "+"
-                                    + &binding.code.to_string(),
-                                action.display_style().key_style,
-                            )
-                        }
-                    })
-                    .chain([Span::styled(
-                        ": ".to_string() + action.into(),
-                        action.display_style().description_style,
-                    )]),
-            )
-        })
-        .collect()
-}
+// TODO: tests
