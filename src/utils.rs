@@ -8,7 +8,7 @@ use std::{
 use crate::consts::DATA_DIR;
 
 // TODO: Move methods to relevant struct or remove them
-fn make_data_path(filename: impl AsRef<Path>) -> PathBuf {
+fn build_data_path(filename: impl AsRef<Path>) -> PathBuf {
     let mut path = DATA_DIR.clone();
     path.push(filename);
     path.set_extension("toml");
@@ -16,21 +16,23 @@ fn make_data_path(filename: impl AsRef<Path>) -> PathBuf {
     path
 }
 
-pub fn write_data<T: Serialize>(filename: impl AsRef<Path>, config: &T) -> Result<()> {
+/// Write data to `crate::consts::DATA_DIR`.
+pub fn write_data<T: Serialize>(filename: impl AsRef<Path>, data: &T) -> Result<()> {
     fs::create_dir_all(DATA_DIR.as_path())?;
 
-    let path = make_data_path(filename);
+    let path = build_data_path(filename);
 
-    let config_str = toml::to_string(config)?;
+    let config_str = toml::to_string(data)?;
     fs::write(path, config_str)?;
 
     Ok(())
 }
 
+/// Read file from `crate::consts::DATA_DIR`.
 pub fn read_data<T: DeserializeOwned>(filename: impl AsRef<Path>) -> Result<Option<T>> {
     fs::create_dir_all(DATA_DIR.as_path())?;
 
-    let path = make_data_path(&filename);
+    let path = build_data_path(&filename);
 
     match fs::exists(&path) {
         Ok(true) => {

@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mediawiki::ApiSync;
 use serde::{Deserialize, Serialize};
 use steamlocate::SteamDir;
@@ -13,6 +13,7 @@ use strum::Display;
 
 use crate::{
     consts::{DATA_FILENAME, PCGW_API, SAVE_SLOT_PATH},
+    dir_swapper::DirSwapper,
     pcgw::{self, PCGWError},
     utils,
 };
@@ -67,46 +68,17 @@ impl GameId {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SaveSlot {
-    label: String,
-    path: PathBuf,
+pub struct SlotMeta {
+    // TODO: date created, last loaded, etc.
 }
 
-impl SaveSlot {
-    pub fn new(label: String, game_name: String) -> Self {
-        SaveSlot {
-            label: label.clone(),
-            path: [
-                SAVE_SLOT_PATH.clone(),
-                PathBuf::from(game_name),
-                PathBuf::from(label),
-            ]
-            .iter()
-            .collect(),
-        }
-    }
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-    pub fn set_label(&mut self, new_label: &str) {
-        self.label = new_label.to_string();
-        self.path.set_file_name(new_label);
-    }
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
+// TODO: Use getters and setters for relevant data maybe to not expose irrelevant
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Game {
-    pub save_slots: Vec<SaveSlot>,
-    // TODO: use pointer instead, maybe
-    pub loaded_slot: Option<usize>,
-    pub game_path: PathBuf,
+    pub slot_metadata: HashMap<String, SlotMeta>,
+    pub slot_swapper: DirSwapper,
 }
-//
-// TODO: game-specific settings
-// TODO: separate game save/slots data struct instead of multiple fields
+
 #[derive(Default, Debug, Serialize, Deserialize)]
 pub struct SaveManager {
     game_data: HashMap<GameId, Game>,
@@ -119,8 +91,8 @@ impl Drop for SaveManager {
     }
 }
 
-// TODO: reorder functionality
 impl SaveManager {
+    /// Loads save swapper from `crate::consts::DATA_FILENAME`
     pub fn build() -> Result<Self> {
         let save_swapper_data = utils::read_data(DATA_FILENAME)?;
 
@@ -167,71 +139,64 @@ impl SaveManager {
         Ok(())
     }
     #[inline]
-    pub fn path(&self, game: GameId) -> &Path {
-        &self.game_data[&game].game_path
+    pub fn path(&self, id: GameId) -> Option<&Path> {
+        self.game_data
+            .get(&id)
+            .map(|game| game.slot_swapper.get_version_dir())
     }
     #[inline]
-    pub fn set_path(&mut self, game: GameId, new_path: &Path) {
-        self.game_data.get_mut(&game).unwrap().game_path = new_path.to_path_buf();
+    pub fn set_path(&mut self, id: GameId, new_path: PathBuf) -> Result<(), ()> {
+        self.game_data.get_mut(&id).map_or(Err(()), |game| {
+            Ok(game.slot_swapper.set_primary_dir(new_path))
+        })
     }
     #[inline]
-    pub fn contains(&self, game: GameId) -> bool {
-        self.game_data.contains_key(&game)
+    pub fn contains(&self, id: GameId) -> bool {
+        self.game_data.contains_key(&id)
     }
     // TODO: do not expose Vec
     #[inline]
-    pub fn get(&self, game: GameId) -> &Vec<SaveSlot> {
-        &self.game_data[&game].save_slots
+    pub fn get(&self, id: GameId) -> Option<&Game> {
+        self.game_data.get(&id)
     }
     // TODO: do not expose indexes, use HashMap with keys or expose references somehow
-    pub fn create(&mut self, game: GameId, label: String) -> Result<usize> {
-        let api = ApiSync::new(PCGW_API)?;
-
-        let save_slot = SaveSlot::new(label, pcgw::fetch_page_by_id(&api, game)?);
-        fs::create_dir_all(save_slot.path())?;
-        let save_slots = &mut self.game_data.get_mut(&game).unwrap().save_slots;
-        save_slots.push(save_slot);
-
-        let len = save_slots.len();
-
-        self.save()?;
-        Ok(len - 1)
+    pub fn create(&mut self, id: GameId, name: &str) -> Result<Option<()>> {
+        Ok(self
+            .game_data
+            .get_mut(&id)
+            .map(|game| game.slot_swapper.add_version(name))
+            .transpose()?)
     }
     // TODO: add import from folder intrsuctions
-    // FIXME: do something about empty imports, will panic right now
-    pub fn import(&mut self, game: GameId, label: String) -> Result<()> {
-        assert!(self.game_data[&game].save_slots.is_empty());
-
-        // TODO: update this to not use the index
-        let index_slot = self.create(game, label)?;
-
-        let game_path = self.path(game);
-        let save_slot_path = self.game_data[&game].save_slots[index_slot].path();
-
-        // copies the whole game's save folder
-        utils::copy_dir_all(
-            game_path,
-            save_slot_path.join(game_path.canonicalize()?.file_name().unwrap()),
-        )?;
-        // TODO: use setter instead or just don't share SaveSlot
-        self.game_data
-            .get_mut(&game)
-            .unwrap()
-            .loaded_slot
-            .replace(index_slot);
-
-        self.save()?;
-        Ok(())
-    }
-    pub fn rename(&mut self, game: GameId, index: usize, new_label: &str) -> Result<()> {
-        // FIXME: bad check
-        assert!(self.game_data[&game].save_slots.len() > index);
-
+    // pub fn import(&mut self, game: GameId, label: String) -> Result<()> {
+    //     assert!(self.game_data[&game].save_slots.is_empty());
+    //
+    //     // TODO: update this to not use the index
+    //     let index_slot = self.create(game, label)?;
+    //
+    //     let game_path = self.path(game);
+    //     let save_slot_path = self.game_data[&game].save_slots[index_slot].path();
+    //
+    //     // copies the whole game's save folder
+    //     utils::copy_dir_all(
+    //         game_path,
+    //         save_slot_path.join(game_path.canonicalize()?.file_name().unwrap()),
+    //     )?;
+    //     // TODO: use setter instead or just don't share SaveSlot
+    //     self.game_data
+    //         .get_mut(&game)
+    //         .unwrap()
+    //         .loaded_slot
+    //         .replace(index_slot);
+    //
+    //     self.save()?;
+    //     Ok(())
+    // }
+    pub fn rename(&mut self, game: GameId, label: &str, new_label: &str) -> Result<(), ()> {
         let save_slot = &mut self.game_data.get_mut(&game).unwrap().save_slots[index];
         fs::rename(save_slot.path(), save_slot.path().with_file_name(new_label))?;
         save_slot.set_label(new_label);
 
-        self.save()?;
         Ok(())
     }
     pub fn delete(&mut self, game: GameId, index: usize) -> Result<()> {

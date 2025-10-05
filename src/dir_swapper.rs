@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -6,8 +7,8 @@ use std::{
 
 use crate::utils;
 
-#[derive(Debug, Default)]
-struct DirSwapper {
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct DirSwapper {
     primary_dir: PathBuf,
     version_dir: PathBuf,
     // Should always be set unless there are no versions
@@ -30,38 +31,47 @@ impl DirSwapper {
         Ok(swapper)
     }
     /// If a version is active, it is stored here.
+    #[inline]
     pub fn primary_dir(&self) -> &Path {
         &self.primary_dir
     }
-    /// Stores all the directories containing a version's contents.
-    pub fn version_dir(&self) -> &Path {
+    /// Stores all versions.
+    #[inline]
+    pub fn get_version_dir(&self) -> &Path {
         &self.version_dir
     }
-    /// Builds the
+    /// Build the full path of the specified version directory.
+    #[inline]
     fn build_version_dir(&self, name: &str) -> PathBuf {
         self.version_dir.join(name)
     }
-    pub fn get_version_dir(&self, name: &str) -> Result<Option<PathBuf>> {
+    /// Get the directory of the specified version, if it exists.
+    pub fn version_dir_of(&self, name: &str) -> Result<Option<PathBuf>> {
         let version_dir = self.build_version_dir(name);
         Ok(fs::exists(&version_dir)?.then_some(version_dir))
+    }
+    /// Returns a list of names of versions in their directory, sorted.
+    pub fn versions(&self) -> Vec<&str> {
+        todo!()
     }
     /// Saves the contents of the primary directory to its correct location and replaces it with
     /// the contents inside of version `name`'s directory. Returns an error if version does not
     /// exist.
-    pub fn set_active(&mut self, name: String) -> Result<()> {
-        if self.get_version_dir(&name)?.is_none() {
+    pub fn set_active(&mut self, name: String) -> Result<Option<()>> {
+        // FIXME: Don't need variables because it would return early anyways.
+        let existed = self.version_dir_of(&name)?.is_none() {
             bail!("failed to set active version to \"{name}\", it does not exist");
         }
 
         let old_version_dir = self
-            .get_version_dir(
+            .version_dir_of(
                 self.active_version
                     .as_deref()
                     .expect("active version should be set if any other version exists"),
             )?
             .expect("active version directory should exist");
         let new_version_dir = self
-            .get_version_dir(&name)?
+            .version_dir_of(&name)?
             .expect(&format!("version \"{name}\" should exist"));
 
         utils::remove_dir_contents(&old_version_dir)?;
@@ -70,16 +80,20 @@ impl DirSwapper {
         utils::copy_dir_all(&new_version_dir, self.primary_dir())?;
 
         self.active_version = Some(name.to_string());
-        Ok(())
+        Ok(Some(()))
     }
-    /// Add a new version and create a correponding directory. Returns an error if version already
+    /// Add a new version and create a correponding directory. Returns `Ok(None)` if version already
     /// exists.
-    pub fn add_version(&mut self, name: &str) -> Result<()> {
-        if fs::exists(self.build_version_dir(name))? {
-            bail!("failed to add version \"{name}\", it already exists");
-        }
+    // FIXME: Err(E) should be for FS errors, Ok(Some(())) should be total sucess and Ok(None)
+    // should be for version not existing and in that case, it *should return early*. Make this
+    // behavior consistent throught here and the rest of the struct.
+    pub fn add_version(&mut self, name: &str) -> Result<Option<()>> {
+        let success = fs::exists(self.build_version_dir(name))?.then_some(());
         fs::create_dir(self.build_version_dir(name))?;
-        Ok(())
+        Ok(success)
+    }
+    pub fn rename_version(&mut self, name: &str, new_name: &str) -> Result<Option<()>> {
+        todo!()
     }
     /// Delete a version and its corresponding directory. Returns an error if it does not exist.
     pub fn delete_version(&mut self, name: &str) -> Result<()> {
@@ -94,15 +108,28 @@ impl DirSwapper {
             self.active_version = None;
         }
         fs::remove_dir_all(
-            self.get_version_dir(name)?
+            self.version_dir_of(name)?
                 .expect("version directory should exist"),
         )?;
 
         Ok(())
     }
     /// Returns version that is loaded in the primary directory, if any.
+    #[inline]
     pub fn active_version(&self) -> Option<&str> {
         self.active_version.as_deref()
+    }
+
+    /// Does not modify old directory.
+    #[inline]
+    pub fn set_primary_dir(&mut self, primary_dir: PathBuf) {
+        self.primary_dir = primary_dir;
+    }
+
+    // Does not modify old directory.
+    #[inline]
+    pub fn set_version_dir(&mut self, version_dir: PathBuf) {
+        self.version_dir = version_dir;
     }
 }
 
@@ -316,11 +343,11 @@ mod tests {
         let swapper = new_swapper(None, Some(temp_dir));
 
         assert_eq!(
-            FileTree::from_path(swapper.get_version_dir("Example2").unwrap().unwrap()),
+            FileTree::from_path(swapper.version_dir_of("Example2").unwrap().unwrap()),
             *DUMMY_FILE_TREE_1,
         );
         assert_eq!(
-            FileTree::from_path(swapper.get_version_dir("Example3").unwrap().unwrap()),
+            FileTree::from_path(swapper.version_dir_of("Example3").unwrap().unwrap()),
             *DUMMY_FILE_TREE_1,
         );
     }
@@ -333,7 +360,7 @@ mod tests {
         let mut swapper = new_swapper(Some(primary_dir), None);
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_2,
         );
 
@@ -370,7 +397,7 @@ mod tests {
         let mut swapper = new_swapper(Some(primary_dir), None);
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_2,
         );
 
@@ -402,7 +429,7 @@ mod tests {
         swapper.add_version("Example2").unwrap();
 
         assert_eq!(
-            FileTree::from_path(swapper.get_version_dir("Example2").unwrap().unwrap()),
+            FileTree::from_path(swapper.version_dir_of("Example2").unwrap().unwrap()),
             FileTree::default(),
         );
     }
@@ -413,7 +440,7 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_1,
         );
 
@@ -426,7 +453,7 @@ mod tests {
         swapper.set_active(DEFAULT_NAME.to_string()).unwrap();
 
         assert_eq!(
-            FileTree::from_path(swapper.get_version_dir("Example2").unwrap().unwrap()),
+            FileTree::from_path(swapper.version_dir_of("Example2").unwrap().unwrap()),
             *DUMMY_FILE_TREE_2
         );
     }
@@ -437,11 +464,11 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_1,
         );
 
-        let version_dir = swapper.get_version_dir("Example2").unwrap().unwrap();
+        let version_dir = swapper.version_dir_of("Example2").unwrap().unwrap();
         swapper.delete_version("Example2").unwrap();
 
         assert!(!fs::exists(version_dir).unwrap());
@@ -453,7 +480,7 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_1,
         );
 
@@ -469,12 +496,50 @@ mod tests {
 
         swapper.add_version("Example2").unwrap();
         build_file_tree(
-            swapper.get_version_dir("Example2").unwrap().unwrap(),
+            swapper.version_dir_of("Example2").unwrap().unwrap(),
             &DUMMY_FILE_TREE_1,
         );
 
         swapper.delete_version("Example2").unwrap();
 
         assert!(fs::exists(swapper.primary_dir()).unwrap());
+    }
+
+    #[test]
+    fn list_versions_finds_newly_added() {
+        let mut swapper = new_swapper(None, None);
+        swapper.add_version("Example1");
+        swapper.add_version("Example2");
+        swapper.add_version("Example3");
+
+        assert_eq!(swapper.versions(), vec!["Example1", "Example2", "Example3"]);
+    }
+
+    #[test]
+    fn list_versions_finds_preexisting() {
+        let temp_dir = new_temp_dir();
+        let version_dir1 = temp_dir.path().to_path_buf().join("Example3");
+        fs::create_dir(&version_dir1).unwrap();
+        let version_dir2 = temp_dir.path().to_path_buf().join("Example4");
+        fs::create_dir(&version_dir2).unwrap();
+
+        let swapper = new_swapper(None, Some(temp_dir));
+
+        assert_eq!(swapper.versions(), vec!["Example3", "Example4"]);
+    }
+
+    #[test]
+    fn list_versions_returns_sorted() {
+        let mut swapper = new_swapper(None, None);
+        swapper.add_version("Example1");
+        swapper.add_version("Example2");
+        swapper.add_version("Example3");
+
+        let versions = {
+            let mut versions = swapper.versions();
+            versions.sort_unstable();
+            versions
+        };
+        assert_eq!(versions, swapper.versions());
     }
 }

@@ -124,7 +124,6 @@ pub struct ExpansionParams<'a> {
 /// Returns None if an undefined abbreviation in the path
 /// Supports non-unicode encoded env variable values
 /// Finds first match only
-// TODO: Fix this super and others
 pub fn replace_path_abbrs(
     path: &str,
     os: Option<&str>,
