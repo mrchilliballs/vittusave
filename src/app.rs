@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{List, ListState, Paragraph, Tabs},
 };
 use steamlocate::error::LocateError;
-use strum::{Display, EnumIter, FromRepr, IntoEnumIterator, IntoStaticStr};
+use strum::{Display, EnumIter, FromRepr, IntoEnumIterator, IntoStaticStr, VariantNames};
 
 use crate::{GameId, SaveManager, utils};
 
@@ -67,8 +67,14 @@ impl App {
             self.selected_tab.keybindings(),
         )))
         .centered();
+        let selected = TabState::VARIANTS
+            .iter()
+            .position(|state| state == &self.selected_tab.tab().to_string());
         frame.render_widget(
-            Tabs::new(TabState::iter().map(|tab| -> &'static str { tab.into() })),
+            Tabs::new(TabState::VARIANTS.iter().copied())
+                .divider("->")
+                .select(selected),
+            // .select(self.selected_tab.tab()),
             layout[0],
         );
         frame.render_widget(instructions, layout[0]);
@@ -233,11 +239,11 @@ impl Action {
     }
 }
 
-#[derive(Debug, IntoStaticStr, Display, Clone, Copy, FromRepr, EnumIter)]
+#[derive(Debug, Display, Clone, Copy, FromRepr, VariantNames)]
 enum TabState {
-    #[strum(serialize = "Games")]
+    #[strum(to_string = "Games")]
     Tab1 { g_pressed: bool },
-    #[strum(serialize = "Saves")]
+    #[strum(to_string = "Saves")]
     Tab2,
 }
 
@@ -318,6 +324,7 @@ impl SelectedTab {
         let empty_message = Paragraph::new(Line::from(vec![
             Span::raw("No games found. Press "),
             // TODO: Lookup actions in keybindings cuz they might change
+            // TODO: Use "->" symbol to separate tabs instead of "|" in the app code
             Span::styled("a", Style::new().italic().light_blue()),
             Span::raw(" to add a new one."),
         ]))
