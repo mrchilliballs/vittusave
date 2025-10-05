@@ -176,7 +176,7 @@ pub struct ActionStyle {
     pub key_style: Style,
 }
 
-#[derive(Debug, IntoStaticStr, Display, Hash, PartialEq, Eq)]
+#[derive(Debug, IntoStaticStr, Display, Hash, PartialEq, Eq, Clone, Copy)]
 #[non_exhaustive]
 // TODO: change visbilities when save manager and utils have better paths
 pub enum Action {
@@ -321,11 +321,17 @@ impl SelectedTab {
         //     Span::raw(": delete game"),
         // ]))
         // .centered();
+        let add_game_action = self
+            .keybindings()
+            .iter()
+            .find(|&&action| Action::AddGame == action)
+            .expect("add game action should be defined in tab 1");
         let empty_message = Paragraph::new(Line::from(vec![
             Span::raw("No games found. Press "),
-            // TODO: Lookup actions in keybindings cuz they might change
-            // TODO: Use "->" symbol to separate tabs instead of "|" in the app code
-            Span::styled("a", Style::new().italic().light_blue()),
+            Span::styled(
+                add_game_action.to_string(),
+                add_game_action.display_style().key_style,
+            ),
             Span::raw(" to add a new one."),
         ]))
         .centered();
