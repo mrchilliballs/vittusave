@@ -1,7 +1,6 @@
 mod api;
 mod utils;
 
-pub use api::PCGWSaveMeta;
 pub use utils::fetch_page_by_id;
 
 use mediawiki::MediaWikiError;
