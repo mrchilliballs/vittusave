@@ -58,7 +58,7 @@ fn main() -> Result<()> {
     //     .collect::<Result<_>>()?;
     //
     let terminal = ratatui::init();
-    let result = App::new().run(terminal);
+    let result = App::build()?.run(terminal);
     ratatui::restore();
     result
 }

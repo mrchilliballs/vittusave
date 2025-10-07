@@ -1,32 +1,39 @@
 mod tabs;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 // use anyhow::{Result, bail}
 use ratatui::{
     DefaultTerminal,
     crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    layout::{Constraint, Layout},
+    layout::{Constraint, Flex, Layout},
     prelude::*,
+    widgets::{Block, Clear, Paragraph},
 };
+use steamlocate::error::LocateError;
 // use steamlocate::error::LocateError;
 
 use crate::{save_manager::GameId, save_manager::SaveManager};
 use tabs::SelectedTab;
 
 /// The main application which holds the state and logic of the application.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct App {
     /// Is the application running?
     running: bool,
     save_swapper: SaveManager,
     selected_tab: SelectedTab,
-    steam_located: bool,
+    steam_err: Option<steamlocate::Error>,
 }
 
 impl App {
     /// Construct a new instance of [`App`].
-    pub fn new() -> Self {
-        Self::default()
+    pub fn build() -> Result<Self> {
+        Ok(Self {
+            running: Default::default(),
+            save_swapper: SaveManager::build()?,
+            selected_tab: Default::default(),
+            steam_err: Default::default(),
+        })
     }
 
     /// Run the application's main loop.
@@ -34,18 +41,13 @@ impl App {
         self.running = true;
         // TODO: Steam installed popup
         // TODO: Uncomment when it's time
-        /*
         if let Err(err) = self.save_swapper.load_steam_library() {
             match err.downcast::<steamlocate::Error>() {
-                Ok(steamlocate::Error::FailedLocate(LocateError::Backend(_)))
-                | Ok(steamlocate::Error::InvalidSteamDir(_)) => {
-                    self.steam_located = false;
-                }
-                Ok(err) => bail!(err),
+                Ok(steamlocate::Error::FailedLocate(_)) => {}
+                Ok(err) => self.steam_err = Some(err),
                 Err(err) => bail!(err),
             }
-        }
-            */
+        };
         while self.running {
             terminal.draw(|frame| self.render(frame))?;
             self.handle_crossterm_events()?;
@@ -63,22 +65,35 @@ impl App {
         let layout =
             Layout::vertical(vec![Constraint::Length(1), Constraint::Min(20)]).split(frame.area());
         self.selected_tab.render_header(frame, layout[0]);
+
+        if let Some(err) = &self.steam_err {
+            let steam_popup = Paragraph::new(Span::styled(err.to_string(), Style::default().red()))
+                .block(Block::bordered().title("Failed to load Steam directory"));
+            let area = popup_area(frame.area(), 60, 20);
+            frame.render_widget(Clear, area);
+            frame.render_widget(steam_popup, area);
+        }
         match self.selected_tab.tab() {
             0 => self.selected_tab.render_tab0(
                 frame,
                 layout[1],
-                &self
-                    .save_swapper
-                    .game_data()
+                self.save_swapper
+                    .games()
                     .keys()
-                    .copied()
-                    // TODO: remove after Steam fetching is fixed
-                    .chain([
-                        GameId::Steam(516750),
-                        GameId::Steam(367520),
-                        GameId::Steam(730),
-                    ])
+                    .map(|game| game.as_str())
                     .collect::<Vec<_>>(),
+                // &self
+                //     .save_swapper
+                //     .game_data()
+                //     .keys()
+                //     .copied()
+                //     // TODO: remove after Steam fetching is fixed
+                //     .chain([
+                //         GameId::Steam(516750),
+                //         GameId::Steam(367520),
+                //         GameId::Steam(730),
+                //     ])
+                //     .collect::<Vec<_>>(),
             ),
             1 => self.selected_tab.render_tab1(frame, layout[1]),
             _ => { /* TODO: log or do something here */ }
@@ -92,7 +107,7 @@ impl App {
     fn handle_crossterm_events(&mut self) -> Result<()> {
         match event::read()? {
             // it's important to check KeyEventKind::Press to avoid handling key release events
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key_event(key)?,
             Event::Mouse(_) => {}
             Event::Resize(_, _) => {}
             _ => {}
@@ -101,20 +116,36 @@ impl App {
     }
 
     /// Handles the key events and updates the state of [`App`].
-    fn on_key_event(&mut self, key: KeyEvent) {
+    fn on_key_event(&mut self, key: KeyEvent) -> Result<()> {
         match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) => {
+                self.steam_err = None;
+                return Ok(());
+            }
             (_, KeyCode::Char('q'))
-            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit(),
+            | (KeyModifiers::CONTROL, KeyCode::Char('c') | KeyCode::Char('C')) => self.quit()?,
             _ => {}
         }
 
         if self.selected_tab.on_key_event(key, &mut self.save_swapper) {
-            self.quit();
+            self.quit()?;
         }
+        Ok(())
     }
 
     /// Set running to false to quit the application.
-    fn quit(&mut self) {
+    fn quit(&mut self) -> Result<()> {
+        self.save_swapper.save()?;
         self.running = false;
+        Ok(())
     }
+}
+
+/// Helper function to create a centered rect using up certain percentage of the available rect `r`
+pub fn popup_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
+    let [area] = vertical.areas(area);
+    let [area] = horizontal.areas(area);
+    area
 }

@@ -229,7 +229,7 @@ impl SelectedTab {
             .unwrap()
     }
 
-    pub fn render_tab0(&mut self, frame: &mut Frame, area: Rect, items: &[GameId]) {
+    pub fn render_tab0(&mut self, frame: &mut Frame, area: Rect, items: Vec<&str>) {
         let add_game_action = self
             .keybindings()
             .iter()
@@ -249,13 +249,7 @@ impl SelectedTab {
             frame.render_widget(empty_message, area);
         } else {
             frame.render_stateful_widget(
-                List::new(
-                    items
-                        .iter()
-                        // FIXME: handle errors and change this because it's   taking   too   long
-                        .map(|item| item.get_name().unwrap().to_string()),
-                )
-                .highlight_symbol(">> "),
+                List::new(items).highlight_symbol(">> "),
                 area,
                 &mut self.ctx.game_selection,
             );

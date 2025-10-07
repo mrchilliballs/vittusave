@@ -10,6 +10,12 @@ pub static DATA_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
         .expect("no data directory found")
         .join("VittuSave")
 });
+pub static CACHE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+    dirs::cache_dir()
+        .expect("no cache directory found")
+        .join("VittuSave")
+});
+
 pub const DATA_FILENAME: &str = "vittusave";
 
 pub const PCGW_API: &str = "https://www.pcgamingwiki.com/w/api.php";
@@ -19,3 +25,5 @@ pub static SAVE_SLOT_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
         .expect("no document directory found")
         .join("VittuSave")
 });
+
+pub const FILE_EXTENSION: &str = "json";

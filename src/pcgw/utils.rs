@@ -1,7 +1,9 @@
 use std::{
+    cell::{Ref, RefCell},
     collections::HashMap,
     env,
     ffi::OsString,
+    fs, io,
     path::{Path, PathBuf},
     sync::LazyLock,
 };
@@ -12,8 +14,11 @@ use scraper::{ElementRef, Html, Node, Selector};
 use log::{debug, info, warn /*, trace*/};
 
 use itertools::Itertools;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use uuid::Uuid;
 
 use crate::{
+    consts::CACHE_DIR,
     pcgw::{
         PCGWError,
         api::{Location, LocationKind},
